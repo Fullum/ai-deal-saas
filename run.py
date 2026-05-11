@@ -6,6 +6,11 @@ import requests
 app = Flask(__name__)
 
 # =========================
+# 🔑 GEMINI CONFIG
+# =========================
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# =========================
 # BASE DE DONNÉES SIMULÉE
 # =========================
 MARKET_DB = {
@@ -20,7 +25,7 @@ MARKET_DB = {
 }
 
 # =========================
-# PRODUITS
+# PRODUITS SIMULÉS
 # =========================
 def generate_ads():
     return [
@@ -42,34 +47,42 @@ def score(price, market):
 # 🤖 GEMINI IA
 # =========================
 def explain(price, market, title):
+
+    if not GEMINI_API_KEY:
+        return "Clé Gemini manquante"
+
     prompt = f"""
 Tu es un expert en analyse de prix.
 
 Produit: {title}
-Prix: {price}€
-Prix marché: {market}€
+Prix affiché: {price}€
+Prix du marché: {market}€
 
-Dis en 2 phrases max si c'est une bonne affaire et pourquoi.
+Réponds en 2 phrases max :
+- est-ce une bonne affaire ?
+- pourquoi ?
 """
 
-    try:
-        url = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
-        response = requests.post(
-            url,
-            params={"key": os.environ.get("GEMINI_API_KEY")},
-            json={
-                "contents": [
-                    {"parts": [{"text": prompt}]}
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
                 ]
             }
-        )
+        ]
+    }
 
-        data = response.json()
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        data = r.json()
+
         return data["candidates"][0]["content"]["parts"][0]["text"]
 
-    except:
-        return "Analyse IA indisponible"
+    except Exception as e:
+        return f"Erreur IA: {str(e)}"
 
 # =========================
 # FRONTEND
@@ -78,7 +91,7 @@ HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>AI Deal SaaS</title>
+<title>AI Deal SaaS (Gemini)</title>
 <style>
 body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
 input{padding:10px;width:250px}
@@ -151,9 +164,8 @@ def search():
     return jsonify(sorted(results, key=lambda x: x["score"], reverse=True))
 
 # =========================
-# START
+# RENDER START
 # =========================
-port = int(os.environ.get("PORT", 10000))
-
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
