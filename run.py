@@ -5,23 +5,21 @@ import requests
 app = Flask(__name__)
 
 # =========================
-# ENV (optionnel)
+# ENV (OPTIONNEL)
 # =========================
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 GOOGLE_CX = os.environ.get("GOOGLE_CX")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # =========================
-# BASE LOCALE (STABLE CORE)
+# BASE LOCALE STABLE
 # =========================
 LOCAL_DB = {
     "ps5": 500,
     "xbox": 450,
-    "iphone 13": 520,
-    "iphone 12 pro": 430,
-    "macbook air m1": 900,
-    "airpods pro": 220
+    "iphone 13": 600,
+    "iphone 12": 450,
+    "macbook air m1": 900
 }
 
 # =========================
@@ -31,7 +29,7 @@ HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>AI Deal SaaS Pro</title>
+<title>AI Deal SaaS</title>
 <style>
 body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
 input{padding:10px;width:250px}
@@ -39,6 +37,7 @@ button{padding:10px;background:#22c55e;border:none;cursor:pointer}
 .card{background:#1e293b;margin:10px auto;width:420px;padding:15px;border-radius:10px;text-align:left}
 .good{color:#22c55e}
 .bad{color:#ef4444}
+.mid{color:#facc15}
 </style>
 </head>
 <body>
@@ -58,12 +57,14 @@ async function search(){
 
     let html="";
     data.forEach(d=>{
-        let c=d.score>70?"good":"bad";
+        let c = d.score >= 80 ? "good" : d.score >= 50 ? "mid" : "bad";
+
         html+=`
         <div class="card">
             <h3>${d.title}</h3>
             <p>💰 ${d.price} €</p>
             <p>📊 <span class="${c}">${d.score}/100</span></p>
+            <p><b>${d.label}</b></p>
             <p>${d.explain}</p>
             <small>${d.source}</small>
         </div>`;
@@ -78,25 +79,49 @@ async function search(){
 """
 
 # =========================
-# HOME ROUTE
+# HOME
 # =========================
 @app.route("/")
 def home():
     return render_template_string(HTML)
 
 # =========================
-# SCORE (REALISTE)
+# SCORE PRO (CORRIGÉ)
 # =========================
 def score(price, market):
-    if not market:
-        return 50
-    return round(max(0, min(100, 100 - abs(price - market) / market * 100)), 1)
+    ratio = price / market
+
+    if ratio < 0.7:
+        return 95
+    elif ratio < 0.85:
+        return 80
+    elif ratio < 1.05:
+        return 60
+    elif ratio < 1.2:
+        return 40
+    else:
+        return 20
 
 # =========================
-# ESTIMATION INTELLIGENTE (PAS RANDOM)
+# LABELS COHÉRENTS
 # =========================
-def estimate_price(query):
-    q = query.lower()
+def label(score):
+    if score >= 85:
+        return "🔥 Excellente affaire"
+    elif score >= 70:
+        return "✅ Très bonne affaire"
+    elif score >= 50:
+        return "⚠️ Prix correct"
+    elif score >= 30:
+        return "❌ Un peu cher"
+    else:
+        return "❌ Trop cher"
+
+# =========================
+# ESTIMATION INTELLIGENTE
+# =========================
+def estimate_price(q):
+    q = q.lower()
 
     if "ps5" in q:
         return 500
@@ -123,8 +148,7 @@ def get_ebay_price(query):
             "SERVICE-VERSION": "1.0.0",
             "SECURITY-APPNAME": EBAY_APP_ID,
             "RESPONSE-DATA-FORMAT": "JSON",
-            "keywords": query,
-            "paginationInput.entriesPerPage": 3
+            "keywords": query
         }
 
         r = requests.get(url, params=params, timeout=4)
@@ -174,17 +198,6 @@ def get_google_price(query):
     return None
 
 # =========================
-# IA FALLBACK (SAFE)
-# =========================
-def explain(title, price, market):
-    if market and price < market:
-        return "Bonne affaire (sous le marché)"
-    elif market and price < market * 1.1:
-        return "Prix correct"
-    else:
-        return "Trop cher par rapport au marché"
-
-# =========================
 # LOGIQUE PRINCIPALE
 # =========================
 @app.route("/search")
@@ -210,15 +223,17 @@ def search():
         market = estimate_price(q)
         source = "Estimated"
 
-    # prix affiché
     price = market + 20
+
+    s = score(price, market)
 
     return jsonify([{
         "title": q,
         "price": round(price, 2),
         "market": round(market, 2),
-        "score": score(price, market),
-        "explain": explain(q, price, market),
+        "score": s,
+        "label": label(s),
+        "explain": "Analyse basée sur écart au prix marché",
         "source": source
     }])
 
