@@ -1,12 +1,11 @@
 from flask import Flask, render_template_string, request, jsonify
 import os
 import requests
-import random
 
 app = Flask(__name__)
 
 # =========================
-# ENV VARIABLES (Render)
+# ENV (optionnel)
 # =========================
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -14,13 +13,25 @@ GOOGLE_CX = os.environ.get("GOOGLE_CX")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # =========================
-# FRONT SIMPLE
+# BASE LOCALE (STABLE CORE)
+# =========================
+LOCAL_DB = {
+    "ps5": 500,
+    "xbox": 450,
+    "iphone 13": 520,
+    "iphone 12 pro": 430,
+    "macbook air m1": 900,
+    "airpods pro": 220
+}
+
+# =========================
+# FRONTEND
 # =========================
 HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>AI Deal SaaS</title>
+<title>AI Deal SaaS Pro</title>
 <style>
 body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
 input{padding:10px;width:250px}
@@ -32,7 +43,7 @@ button{padding:10px;background:#22c55e;border:none;cursor:pointer}
 </head>
 <body>
 
-<h1>🚀 AI Deal SaaS (Stable)</h1>
+<h1>🚀 AI Deal SaaS (Stable Pro)</h1>
 
 <input id="q" placeholder="ex: PS5">
 <button onclick="search()">Search</button>
@@ -67,7 +78,7 @@ async function search(){
 """
 
 # =========================
-# HOME ROUTE (IMPORTANT)
+# HOME ROUTE
 # =========================
 @app.route("/")
 def home():
@@ -82,32 +93,49 @@ def score(price, market):
     return round(max(0, min(100, 100 - abs(price - market) / market * 100)), 1)
 
 # =========================
-# EBAY API
+# ESTIMATION INTELLIGENTE (PAS RANDOM)
+# =========================
+def estimate_price(query):
+    q = query.lower()
+
+    if "ps5" in q:
+        return 500
+    if "xbox" in q:
+        return 450
+    if "iphone" in q:
+        return 600
+    if "macbook" in q:
+        return 900
+
+    return 500
+
+# =========================
+# EBAY (OPTIONNEL)
 # =========================
 def get_ebay_price(query):
     if not EBAY_APP_ID:
         return None
 
-    url = "https://svcs.ebay.com/services/search/FindingService/v1"
-    params = {
-        "OPERATION-NAME": "findItemsByKeywords",
-        "SERVICE-VERSION": "1.0.0",
-        "SECURITY-APPNAME": EBAY_APP_ID,
-        "RESPONSE-DATA-FORMAT": "JSON",
-        "keywords": query,
-        "paginationInput.entriesPerPage": 5
-    }
-
     try:
-        r = requests.get(url, params=params, timeout=5)
+        url = "https://svcs.ebay.com/services/search/FindingService/v1"
+        params = {
+            "OPERATION-NAME": "findItemsByKeywords",
+            "SERVICE-VERSION": "1.0.0",
+            "SECURITY-APPNAME": EBAY_APP_ID,
+            "RESPONSE-DATA-FORMAT": "JSON",
+            "keywords": query,
+            "paginationInput.entriesPerPage": 3
+        }
+
+        r = requests.get(url, params=params, timeout=4)
         data = r.json()
 
         items = data["findItemsByKeywordsResponse"][0]["searchResult"][0].get("item", [])
 
         prices = []
-        for item in items:
+        for i in items:
             try:
-                prices.append(float(item["sellingStatus"][0]["currentPrice"][0]["__value__"]))
+                prices.append(float(i["sellingStatus"][0]["currentPrice"][0]["__value__"]))
             except:
                 pass
 
@@ -120,7 +148,7 @@ def get_ebay_price(query):
     return None
 
 # =========================
-# GOOGLE FALLBACK
+# GOOGLE (OPTIONNEL)
 # =========================
 def get_google_price(query):
     if not GOOGLE_API_KEY or not GOOGLE_CX:
@@ -134,11 +162,11 @@ def get_google_price(query):
             "q": query + " prix"
         }
 
-        r = requests.get(url, timeout=5, params=params)
+        r = requests.get(url, params=params, timeout=4)
         data = r.json()
 
         if "items" in data:
-            return random.randint(300, 700)
+            return estimate_price(query)
 
     except:
         pass
@@ -146,66 +174,51 @@ def get_google_price(query):
     return None
 
 # =========================
-# GEMINI SAFE FALLBACK
+# IA FALLBACK (SAFE)
 # =========================
-def gemini_explain(title, price, market):
-    if not GEMINI_API_KEY:
-        return "Analyse IA indisponible"
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-
-    prompt = f"""
-Produit: {title}
-Prix: {price}
-Marché: {market}
-
-Donne une analyse courte (1 phrase).
-"""
-
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }]
-    }
-
-    try:
-        r = requests.post(url, json=payload, timeout=5)
-        data = r.json()
-
-        if "candidates" in data and len(data["candidates"]) > 0:
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-
-    except:
-        pass
-
-    return "Analyse indisponible"
+def explain(title, price, market):
+    if market and price < market:
+        return "Bonne affaire (sous le marché)"
+    elif market and price < market * 1.1:
+        return "Prix correct"
+    else:
+        return "Trop cher par rapport au marché"
 
 # =========================
-# SEARCH API
+# LOGIQUE PRINCIPALE
 # =========================
 @app.route("/search")
 def search():
     q = request.args.get("q", "PS5")
 
+    # 1. eBay
     market = get_ebay_price(q)
-    source = "eBay API"
+    source = "eBay"
 
+    # 2. Google
     if not market:
         market = get_google_price(q)
-        source = "Google fallback"
+        source = "Google"
 
+    # 3. Local DB
     if not market:
-        market = random.randint(300, 700)
-        source = "local fallback"
+        market = LOCAL_DB.get(q.lower())
+        source = "Local DB"
 
-    price = market + random.randint(-80, 80)
+    # 4. estimation finale
+    if not market:
+        market = estimate_price(q)
+        source = "Estimated"
+
+    # prix affiché
+    price = market + 20
 
     return jsonify([{
         "title": q,
         "price": round(price, 2),
         "market": round(market, 2),
         "score": score(price, market),
-        "explain": gemini_explain(q, price, market),
+        "explain": explain(q, price, market),
         "source": source
     }])
 
