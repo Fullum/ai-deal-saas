@@ -1,49 +1,81 @@
 from flask import Flask, render_template_string, request, jsonify
-import random
-import os
 import requests
+import os
+import random
+from bs4 import BeautifulSoup
 
-# =========================
-# FLASK APP
-# =========================
 app = Flask(__name__)
 
 # =========================
-# GEMINI API KEY
+# 🔑 GEMINI KEY
 # =========================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # =========================
-# BASE DE DONNÉES SIMULÉE
+# 🔍 SCRAP EBAY (vraies données)
 # =========================
-MARKET_DB = {
-    "iPhone 13": 520,
-    "iPhone 12 Pro": 430,
-    "MacBook Air M1": 900,
-    "PS5": 500,
-    "Samsung S21": 360,
-    "AirPods Pro": 220,
-    "iPad 9": 340,
-    "Apple Watch": 300
-}
+def generate_real_ads(query):
+
+    if not query:
+        return []
+
+    url = f"https://www.ebay.fr/sch/i.html?_nkw={query}"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        items = soup.select(".s-item")
+
+        results = []
+
+        for item in items[:10]:
+
+            title = item.select_one(".s-item__title")
+            price = item.select_one(".s-item__price")
+
+            if not title or not price:
+                continue
+
+            try:
+                p = price.text.replace("EUR", "").replace("€", "").replace(",", ".")
+                value = float(p.split()[0])
+
+                results.append({
+                    "title": title.text,
+                    "price": value
+                })
+
+            except:
+                continue
+
+        return results
+
+    except:
+        return []
 
 # =========================
-# GÉNÉRATION PRODUITS
+# 📊 PRIX MOYEN MARCHÉ
 # =========================
-def generate_ads():
-    return [
-        {
-            "title": name,
-            "price": market + random.randint(-150, 150),
-            "market": market
-        }
-        for name, market in MARKET_DB.items()
-    ]
+def market_price(ads):
+
+    if not ads:
+        return 0
+
+    return round(sum(a["price"] for a in ads) / len(ads), 2)
 
 # =========================
-# SCORE IA
+# 🧠 SCORE
 # =========================
 def score(price, market):
+
+    if market == 0:
+        return 50
+
     return max(
         0,
         min(
@@ -53,113 +85,70 @@ def score(price, market):
     )
 
 # =========================
-# FALLBACK SI IA HS
+# 🧠 FALLBACK IA
 # =========================
-def fallback_analysis(price, market):
+def fallback(price, market):
 
     diff = price - market
 
     if diff <= -50:
-        return "🔥 Excellente affaire. Le prix est largement inférieur au marché."
-
+        return "🔥 Excellente affaire"
     elif diff < 0:
-        return "✅ Bonne affaire. Prix légèrement inférieur au marché."
-
+        return "✅ Bonne affaire"
     elif diff <= 50:
-        return "⚠️ Prix correct mais peu intéressant."
-
+        return "⚠️ Prix correct"
     else:
-        return "❌ Trop cher par rapport au prix moyen du marché."
+        return "❌ Trop cher"
 
 # =========================
-# GEMINI AI ANALYSIS
+# 🤖 GEMINI IA
 # =========================
 def explain(price, market, title):
 
-    # =========================
-    # PAS DE CLÉ
-    # =========================
     if not GEMINI_API_KEY:
-        return fallback_analysis(price, market)
+        return fallback(price, market)
 
     prompt = f"""
-Tu es un expert en analyse de prix.
+Produit: {title}
+Prix: {price}€
+Marché: {market}€
 
-Produit : {title}
-Prix affiché : {price}€
-Prix moyen du marché : {market}€
-
-Donne une analyse courte en français.
-Maximum 2 phrases.
+Analyse en 2 phrases max :
 """
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1/models/"
-        f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-    )
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
 
     payload = {
         "contents": [
             {
-                "parts": [
-                    {
-                        "text": prompt
-                    }
-                ]
+                "parts": [{"text": prompt}]
             }
         ]
     }
 
     try:
 
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=10
-        )
+        r = requests.post(url, json=payload, timeout=10)
+        data = r.json()
 
-        data = response.json()
-
-        # =========================
-        # ERREUR API
-        # =========================
         if "error" in data:
+            return fallback(price, market)
 
-            error_msg = str(data["error"])
-
-            # QUOTA GOOGLE
-            if "quota" in error_msg.lower():
-                return fallback_analysis(price, market)
-
-            return "⚠️ IA temporairement indisponible."
-
-        # =========================
-        # FORMAT INVALIDE
-        # =========================
-        if "candidates" not in data:
-            return fallback_analysis(price, market)
-
-        # =========================
-        # RÉPONSE IA
-        # =========================
         return data["candidates"][0]["content"]["parts"][0]["text"]
 
     except:
-        return fallback_analysis(price, market)
+        return fallback(price, market)
 
 # =========================
-# FRONTEND HTML
+# 🎨 FRONT
 # =========================
 HTML = """
 <!DOCTYPE html>
 <html>
-
 <head>
-
 <title>AI Deal SaaS</title>
 
 <style>
-
 body{
     font-family:Arial;
     background:#0f172a;
@@ -179,7 +168,6 @@ button{
     border:none;
     cursor:pointer;
     color:white;
-    font-weight:bold;
 }
 
 .card{
@@ -191,23 +179,16 @@ button{
     text-align:left;
 }
 
-.good{
-    color:#22c55e;
-}
-
-.bad{
-    color:#ef4444;
-}
-
+.good{color:#22c55e;}
+.bad{color:#ef4444;}
 </style>
-
 </head>
 
 <body>
 
-<h1>🚀 AI Deal SaaS (Gemini)</h1>
+<h1>🚀 AI Deal SaaS (Gemini + eBay)</h1>
 
-<input id="q" placeholder="ex: iPhone">
+<input id="q" placeholder="ex: PS5">
 <button onclick="search()">Search</button>
 
 <div id="out"></div>
@@ -219,33 +200,21 @@ async function search(){
     const q = document.getElementById("q").value;
 
     const res = await fetch("/search?q=" + q);
-
     const data = await res.json();
 
     let html = "";
 
     data.forEach(d => {
 
-        let c = d.score > 75 ? "good" : "bad";
+        let c = d.score > 70 ? "good" : "bad";
 
         html += `
         <div class="card">
-
             <h3>${d.title}</h3>
-
             <p>💰 ${d.price} €</p>
-
-            <p>
-                📊
-                <span class="${c}">
-                    ${d.score}/100
-                </span>
-            </p>
-
+            <p>📊 <span class="${c}">${d.score}/100</span></p>
             <p>${d.explain}</p>
-
-        </div>
-        `;
+        </div>`;
     });
 
     document.getElementById("out").innerHTML = html;
@@ -258,67 +227,41 @@ async function search(){
 """
 
 # =========================
-# HOME
+# 🏠 HOME
 # =========================
 @app.route("/")
 def home():
     return render_template_string(HTML)
 
 # =========================
-# SEARCH API
+# 🔎 SEARCH API
 # =========================
 @app.route("/search")
 def search():
 
-    q = request.args.get("q", "").lower()
+    q = request.args.get("q", "")
 
-    ads = generate_ads()
+    ads = generate_real_ads(q)
 
-    if q:
-        ads = [
-            a for a in ads
-            if q in a["title"].lower()
-        ]
+    market = market_price(ads)
 
     results = []
 
     for a in ads:
 
         results.append({
-
             "title": a["title"],
-
             "price": a["price"],
-
-            "market": a["market"],
-
-            "score": score(
-                a["price"],
-                a["market"]
-            ),
-
-            "explain": explain(
-                a["price"],
-                a["market"],
-                a["title"]
-            )
+            "score": score(a["price"], market),
+            "explain": explain(a["price"], market, a["title"])
         })
 
-    return jsonify(
-        sorted(
-            results,
-            key=lambda x: x["score"],
-            reverse=True
-        )
-    )
+    return jsonify(results)
 
 # =========================
-# START SERVER
+# 🚀 START
 # =========================
 port = int(os.environ.get("PORT", 10000))
 
 if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+    app.run(host="0.0.0.0", port=port)
