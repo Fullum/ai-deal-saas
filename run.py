@@ -65,7 +65,8 @@ Donne une analyse courte en français (2 phrases max).
 Dis si c'est une bonne affaire ou non.
 """
 
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # ✅ NOUVEAU MODÈLE GEMINI
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
 
     payload = {
         "contents": [
@@ -78,7 +79,11 @@ Dis si c'est une bonne affaire ou non.
     }
 
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=10
+        )
 
         data = response.json()
 
@@ -89,13 +94,13 @@ Dis si c'est une bonne affaire ou non.
             return f"Erreur Gemini: {data['error']['message']}"
 
         # =========================
-        # DEBUG FORMAT
+        # VÉRIFICATION RÉPONSE
         # =========================
         if "candidates" not in data:
             return f"Réponse inconnue: {data}"
 
         # =========================
-        # RÉPONSE IA
+        # TEXTE IA
         # =========================
         return data["candidates"][0]["content"]["parts"][0]["text"]
 
