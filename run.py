@@ -1,21 +1,19 @@
 from flask import Flask, render_template_string, request, jsonify
 import os
-import requests
 import time
+import random
 
 app = Flask(__name__)
 
 # =========================
 # CONFIG
 # =========================
-EBAY_APP_ID = os.environ.get("EBAY_APP_ID")
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-GOOGLE_CX = os.environ.get("GOOGLE_CX")
-
-CACHE = {}  # simple cache mémoire (scaling léger)
+USERS_DB = {}
+ALERTS_DB = []
+PRICE_HISTORY = {}
 
 # =========================
-# BASE INTELLIGENTE (fallback marché)
+# BASE PRODUITS
 # =========================
 BASE_MARKET = {
     "ps5": 500,
@@ -27,34 +25,43 @@ BASE_MARKET = {
 }
 
 # =========================
-# FRONTEND SaaS CLEAN
+# FRONTEND DASHBOARD SaaS
 # =========================
 HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>SaaS Scaling AI Deal</title>
+<title>SaaS V2 Monetization AI</title>
 <style>
 body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
-input{padding:10px;width:260px;border-radius:6px;border:none}
-button{padding:10px;background:#22c55e;border:none;border-radius:6px;cursor:pointer}
-.card{background:#1e293b;margin:10px auto;width:430px;padding:15px;border-radius:10px;text-align:left}
+input{padding:10px;width:250px;border-radius:6px;border:none}
+button{padding:10px;background:#22c55e;border:none;border-radius:6px;cursor:pointer;margin:5px}
+.card{background:#1e293b;margin:10px auto;width:450px;padding:15px;border-radius:10px;text-align:left}
 .good{color:#22c55e}
 .mid{color:#facc15}
 .bad{color:#ef4444}
 small{color:#94a3b8}
+.section{margin-top:20px}
 </style>
 </head>
 <body>
 
-<h1>🚀 SaaS Scaling AI Deal V1</h1>
+<h1>🚀 SaaS V2 AI Deal Platform</h1>
 
 <input id="q" placeholder="ex: PS5">
 <button onclick="search()">Search</button>
 
 <div id="out"></div>
 
+<h2 class="section">🔔 Alertes prix</h2>
+<input id="alert_item" placeholder="produit">
+<input id="alert_price" placeholder="prix cible">
+<button onclick="addAlert()">Ajouter alerte</button>
+
+<div id="alerts"></div>
+
 <script>
+
 async function search(){
     const q=document.getElementById("q").value;
     const res=await fetch("/search?q="+q);
@@ -77,6 +84,37 @@ async function search(){
 
     document.getElementById("out").innerHTML=html;
 }
+
+async function addAlert(){
+    const item=document.getElementById("alert_item").value;
+    const price=document.getElementById("alert_price").value;
+
+    await fetch("/alert",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({item,price})
+    });
+
+    loadAlerts();
+}
+
+async function loadAlerts(){
+    const res=await fetch("/alerts");
+    const data=await res.json();
+
+    let html="<h3>Mes alertes</h3>";
+
+    data.forEach(a=>{
+        html+=`<div class="card">
+            ${a.item} - cible: ${a.price}€
+        </div>`;
+    });
+
+    document.getElementById("alerts").innerHTML=html;
+}
+
+loadAlerts();
+
 </script>
 
 </body>
@@ -91,172 +129,107 @@ def home():
     return render_template_string(HTML)
 
 # =========================
-# CACHE SYSTEM (important scaling)
+# HISTORIQUE PRIX (DATA ENGINE)
 # =========================
-def cache_get(key):
-    data = CACHE.get(key)
-    if data and time.time() - data["time"] < 60:  # 60 sec cache
-        return data["value"]
-    return None
+def add_history(product, price):
+    if product not in PRICE_HISTORY:
+        PRICE_HISTORY[product] = []
 
-def cache_set(key, value):
-    CACHE[key] = {"value": value, "time": time.time()}
+    PRICE_HISTORY[product].append({
+        "price": price,
+        "time": time.time()
+    })
+
+# =========================
+# IA SCORING (ML LIGHT SIMULÉ)
+# =========================
+def ai_score(price, market):
+    ratio = price / market
+
+    noise = random.uniform(-3, 3)
+
+    score = 100 - (ratio * 100) + noise
+
+    return max(0, min(100, round(score, 1)))
+
+# =========================
+# LABELS
+# =========================
+def label(score):
+    if score >= 85:
+        return "🔥 Opportunité exceptionnelle"
+    elif score >= 70:
+        return "✅ Bonne affaire"
+    elif score >= 50:
+        return "⚠️ Prix correct"
+    elif score >= 30:
+        return "❌ Peu intéressant"
+    return "❌ Mauvais deal"
 
 # =========================
 # MARKET ESTIMATION
 # =========================
-def estimate_market(q):
+def estimate(q):
     q = q.lower()
-
-    for k, v in BASE_MARKET.items():
-        if k in q:
-            return v
-
-    return 500
+    return BASE_MARKET.get(q, 500)
 
 # =========================
-# SCORE ENGINE (SCALING VERSION)
-# =========================
-def score(price, market):
-    ratio = price / market
-
-    if ratio <= 0.70:
-        return 98
-    elif ratio <= 0.85:
-        return 86
-    elif ratio <= 0.95:
-        return 72
-    elif ratio <= 1.10:
-        return 58
-    elif ratio <= 1.25:
-        return 40
-    else:
-        return 18
-
-# =========================
-# LABEL ENGINE
-# =========================
-def label(score):
-    if score >= 90:
-        return "🔥 Deal exceptionnel"
-    elif score >= 75:
-        return "✅ Très bonne affaire"
-    elif score >= 55:
-        return "⚠️ Prix correct"
-    elif score >= 35:
-        return "❌ Peu intéressant"
-    else:
-        return "❌ Mauvais deal"
-
-# =========================
-# EBAY (OPTIONNEL SAFE)
-# =========================
-def ebay_price(q):
-    if not EBAY_APP_ID:
-        return None
-
-    try:
-        url = "https://svcs.ebay.com/services/search/FindingService/v1"
-        params = {
-            "OPERATION-NAME": "findItemsByKeywords",
-            "SERVICE-VERSION": "1.0.0",
-            "SECURITY-APPNAME": EBAY_APP_ID,
-            "RESPONSE-DATA-FORMAT": "JSON",
-            "keywords": q
-        }
-
-        r = requests.get(url, params=params, timeout=4)
-        data = r.json()
-
-        items = data["findItemsByKeywordsResponse"][0]["searchResult"][0].get("item", [])
-
-        prices = []
-        for i in items:
-            try:
-                prices.append(float(i["sellingStatus"][0]["currentPrice"][0]["__value__"]))
-            except:
-                pass
-
-        if prices:
-            return sum(prices) / len(prices)
-
-    except:
-        pass
-
-    return None
-
-# =========================
-# GOOGLE FALLBACK
-# =========================
-def google_price(q):
-    if not GOOGLE_API_KEY or not GOOGLE_CX:
-        return None
-
-    try:
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {
-            "key": GOOGLE_API_KEY,
-            "cx": GOOGLE_CX,
-            "q": q + " prix"
-        }
-
-        r = requests.get(url, timeout=4, params=params)
-        data = r.json()
-
-        if "items" in data:
-            return estimate_market(q)
-
-    except:
-        pass
-
-    return None
-
-# =========================
-# MAIN ENGINE (SCALABLE PIPELINE)
+# ENGINE PRINCIPAL
 # =========================
 @app.route("/search")
 def search():
-    q = request.args.get("q", "ps5").lower()
+    q = request.args.get("q","ps5").lower()
 
-    # CACHE FIRST (important scaling)
-    cached = cache_get(q)
-    if cached:
-        return jsonify(cached)
+    market = estimate(q)
 
-    # 1. EBAY
-    market = ebay_price(q)
-    source = "eBay"
+    # simulation prix marché réel
+    price = market + random.randint(-80, 120)
 
-    # 2. GOOGLE
-    if not market:
-        market = google_price(q)
-        source = "Google"
+    score = ai_score(price, market)
 
-    # 3. LOCAL BASE
-    if not market:
-        market = BASE_MARKET.get(q)
-        source = "Local DB"
+    label_txt = label(score)
 
-    # 4. FALLBACK ESTIMATE
-    if not market:
-        market = estimate_market(q)
-        source = "Estimated AI"
+    # historique
+    add_history(q, price)
 
-    price = market + 20
-
-    result = [{
+    return jsonify([{
         "title": q.upper(),
-        "price": round(price, 2),
-        "market": round(market, 2),
-        "score": score(price, market),
-        "label": label(score(price, market)),
-        "explain": "Analyse multi-source + fallback intelligent + cache actif",
-        "source": source
-    }]
+        "price": round(price,2),
+        "market": market,
+        "score": score,
+        "label": label_txt,
+        "explain": "IA scoring + historique + simulation marché",
+        "source": "AI Engine V2"
+    }])
 
-    cache_set(q, result)
+# =========================
+# ALERTES PRIX
+# =========================
+@app.route("/alert", methods=["POST"])
+def alert():
+    data = request.json
 
-    return jsonify(result)
+    ALERTS_DB.append({
+        "item": data["item"],
+        "price": data["price"]
+    })
+
+    return {"status":"ok"}
+
+@app.route("/alerts")
+def alerts():
+    return jsonify(ALERTS_DB)
+
+# =========================
+# ANALYTICS SIMPLE
+# =========================
+@app.route("/analytics")
+def analytics():
+    return jsonify({
+        "tracked_products": len(PRICE_HISTORY),
+        "alerts": len(ALERTS_DB),
+        "history": PRICE_HISTORY
+    })
 
 # =========================
 # RUN
