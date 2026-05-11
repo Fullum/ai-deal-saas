@@ -2,11 +2,18 @@ from flask import Flask, render_template_string, request, jsonify
 import random
 import os
 
+# =========================
+# 🔥 IA (OpenAI)
+# =========================
+from openai import OpenAI
+
 app = Flask(__name__)
 
-# -----------------------------
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# =========================
 # BASE DE DONNÉES SIMULÉE
-# -----------------------------
+# =========================
 MARKET_DB = {
     "iPhone 13": 520,
     "iPhone 12 Pro": 430,
@@ -18,6 +25,9 @@ MARKET_DB = {
     "Apple Watch": 300
 }
 
+# =========================
+# GÉNÉRATION PRODUITS
+# =========================
 def generate_ads():
     return [
         {
@@ -28,20 +38,42 @@ def generate_ads():
         for name, market in MARKET_DB.items()
     ]
 
+# =========================
+# SCORE (simple)
+# =========================
 def score(price, market):
     return max(0, min(100, round(50 + ((market - price) / market) * 120, 1)))
 
-def explain(price, market):
-    if price < market * 0.85:
-        return "🔥 Très bonne affaire"
-    elif price < market:
-        return "👍 Bon prix"
-    return "⚠️ Trop cher"
+# =========================
+# 🤖 IA (REMPLACE L'ANCIENNE LOGIQUE)
+# =========================
+def explain(price, market, title):
+    prompt = f"""
+Tu es un expert en analyse de prix.
 
+Produit: {title}
+Prix affiché: {price}€
+Prix du marché: {market}€
 
-# -----------------------------
+Donne une analyse courte (max 2 phrases) :
+- est-ce une bonne affaire ou non
+- pourquoi
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response.choices[0].message.content
+    except:
+        return "Analyse IA indisponible"
+
+# =========================
 # FRONTEND HTML
-# -----------------------------
+# =========================
 HTML = """
 <!DOCTYPE html>
 <html>
@@ -57,9 +89,12 @@ button{padding:10px;background:#22c55e;border:none;cursor:pointer}
 </style>
 </head>
 <body>
-<h1>🚀 AI Deal SaaS</h1>
+
+<h1>🚀 AI Deal SaaS (IA activée)</h1>
+
 <input id="q" placeholder="ex: iPhone">
 <button onclick="search()">Search</button>
+
 <div id="out"></div>
 
 <script>
@@ -83,18 +118,21 @@ async function search(){
     document.getElementById("out").innerHTML=html;
 }
 </script>
+
 </body>
 </html>
 """
 
-
-# -----------------------------
-# ROUTES FLASK
-# -----------------------------
+# =========================
+# ROUTE HOME
+# =========================
 @app.route("/")
 def home():
     return render_template_string(HTML)
 
+# =========================
+# API SEARCH
+# =========================
 @app.route("/search")
 def search():
     q = request.args.get("q", "").lower()
@@ -110,15 +148,18 @@ def search():
             "price": a["price"],
             "market": a["market"],
             "score": score(a["price"], a["market"]),
-            "explain": explain(a["price"], a["market"])
+
+            # =========================
+            # 🔥 IA ICI
+            # =========================
+            "explain": explain(a["price"], a["market"], a["title"])
         })
 
     return jsonify(sorted(results, key=lambda x: x["score"], reverse=True))
 
-
-# -----------------------------
-# RENDER CONFIG (IMPORTANT)
-# -----------------------------
+# =========================
+# RENDER START CONFIG
+# =========================
 port = int(os.environ.get("PORT", 10000))
 
 if __name__ == "__main__":
