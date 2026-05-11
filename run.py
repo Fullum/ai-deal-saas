@@ -1,41 +1,44 @@
 from flask import Flask, render_template_string, request, jsonify
 import os
 import requests
+import time
 
 app = Flask(__name__)
 
 # =========================
-# CONFIG (OPTIONNEL)
+# CONFIG
 # =========================
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 GOOGLE_CX = os.environ.get("GOOGLE_CX")
 
+CACHE = {}  # simple cache mémoire (scaling léger)
+
 # =========================
-# BASE LOCALE (FALLBACK)
+# BASE INTELLIGENTE (fallback marché)
 # =========================
-LOCAL_DB = {
+BASE_MARKET = {
     "ps5": 500,
     "xbox": 450,
     "iphone 13": 600,
-    "iphone 12": 450,
+    "iphone 14": 750,
     "macbook air m1": 900,
     "airpods pro": 220
 }
 
 # =========================
-# FRONTEND SIMPLE SaaS
+# FRONTEND SaaS CLEAN
 # =========================
 HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>AI Deal SaaS PRO V3</title>
+<title>SaaS Scaling AI Deal</title>
 <style>
 body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
-input{padding:10px;width:250px;border-radius:6px;border:none}
-button{padding:10px;background:#22c55e;border:none;cursor:pointer;border-radius:6px}
-.card{background:#1e293b;margin:10px auto;width:420px;padding:15px;border-radius:10px;text-align:left}
+input{padding:10px;width:260px;border-radius:6px;border:none}
+button{padding:10px;background:#22c55e;border:none;border-radius:6px;cursor:pointer}
+.card{background:#1e293b;margin:10px auto;width:430px;padding:15px;border-radius:10px;text-align:left}
 .good{color:#22c55e}
 .mid{color:#facc15}
 .bad{color:#ef4444}
@@ -44,7 +47,7 @@ small{color:#94a3b8}
 </head>
 <body>
 
-<h1>🚀 AI Deal SaaS PRO V3</h1>
+<h1>🚀 SaaS Scaling AI Deal V1</h1>
 
 <input id="q" placeholder="ex: PS5">
 <button onclick="search()">Search</button>
@@ -59,7 +62,7 @@ async function search(){
 
     let html="";
     data.forEach(d=>{
-        let c = d.score >= 80 ? "good" : d.score >= 50 ? "mid" : "bad";
+        let c = d.score>=80?"good":d.score>=50?"mid":"bad";
 
         html+=`
         <div class="card">
@@ -88,61 +91,67 @@ def home():
     return render_template_string(HTML)
 
 # =========================
-# ESTIMATION INTELLIGENTE
+# CACHE SYSTEM (important scaling)
 # =========================
-def estimate_price(q):
+def cache_get(key):
+    data = CACHE.get(key)
+    if data and time.time() - data["time"] < 60:  # 60 sec cache
+        return data["value"]
+    return None
+
+def cache_set(key, value):
+    CACHE[key] = {"value": value, "time": time.time()}
+
+# =========================
+# MARKET ESTIMATION
+# =========================
+def estimate_market(q):
     q = q.lower()
 
-    if "ps5" in q:
-        return 500
-    if "xbox" in q:
-        return 450
-    if "iphone" in q:
-        return 600
-    if "macbook" in q:
-        return 900
+    for k, v in BASE_MARKET.items():
+        if k in q:
+            return v
 
     return 500
 
 # =========================
-# SCORE PRO V3 (REAL MARKET LOGIC)
+# SCORE ENGINE (SCALING VERSION)
 # =========================
 def score(price, market):
     ratio = price / market
 
-    # logique plus réaliste type marketplace
     if ratio <= 0.70:
-        return 97  # grosse affaire
+        return 98
     elif ratio <= 0.85:
-        return 85
+        return 86
     elif ratio <= 0.95:
-        return 70
+        return 72
     elif ratio <= 1.10:
-        return 55
+        return 58
     elif ratio <= 1.25:
-        return 35
+        return 40
     else:
-        return 15
+        return 18
 
 # =========================
-# LABEL PRO
+# LABEL ENGINE
 # =========================
 def label(score):
     if score >= 90:
-        return "🔥 Opportunité exceptionnelle"
+        return "🔥 Deal exceptionnel"
     elif score >= 75:
         return "✅ Très bonne affaire"
     elif score >= 55:
         return "⚠️ Prix correct"
-    elif score >= 30:
+    elif score >= 35:
         return "❌ Peu intéressant"
     else:
-        return "❌ Mauvaise affaire"
+        return "❌ Mauvais deal"
 
 # =========================
 # EBAY (OPTIONNEL SAFE)
 # =========================
-def get_ebay_price(query):
+def ebay_price(q):
     if not EBAY_APP_ID:
         return None
 
@@ -153,7 +162,7 @@ def get_ebay_price(query):
             "SERVICE-VERSION": "1.0.0",
             "SECURITY-APPNAME": EBAY_APP_ID,
             "RESPONSE-DATA-FORMAT": "JSON",
-            "keywords": query
+            "keywords": q
         }
 
         r = requests.get(url, params=params, timeout=4)
@@ -177,9 +186,9 @@ def get_ebay_price(query):
     return None
 
 # =========================
-# GOOGLE (OPTIONNEL)
+# GOOGLE FALLBACK
 # =========================
-def get_google_price(query):
+def google_price(q):
     if not GOOGLE_API_KEY or not GOOGLE_CX:
         return None
 
@@ -188,14 +197,14 @@ def get_google_price(query):
         params = {
             "key": GOOGLE_API_KEY,
             "cx": GOOGLE_CX,
-            "q": query + " prix"
+            "q": q + " prix"
         }
 
         r = requests.get(url, timeout=4, params=params)
         data = r.json()
 
         if "items" in data:
-            return estimate_price(query)
+            return estimate_market(q)
 
     except:
         pass
@@ -203,40 +212,51 @@ def get_google_price(query):
     return None
 
 # =========================
-# LOGIQUE PRINCIPALE
+# MAIN ENGINE (SCALABLE PIPELINE)
 # =========================
 @app.route("/search")
 def search():
-    q = request.args.get("q", "PS5")
+    q = request.args.get("q", "ps5").lower()
 
-    market = get_ebay_price(q)
+    # CACHE FIRST (important scaling)
+    cached = cache_get(q)
+    if cached:
+        return jsonify(cached)
+
+    # 1. EBAY
+    market = ebay_price(q)
     source = "eBay"
 
+    # 2. GOOGLE
     if not market:
-        market = get_google_price(q)
+        market = google_price(q)
         source = "Google"
 
+    # 3. LOCAL BASE
     if not market:
-        market = LOCAL_DB.get(q.lower())
+        market = BASE_MARKET.get(q)
         source = "Local DB"
 
+    # 4. FALLBACK ESTIMATE
     if not market:
-        market = estimate_price(q)
-        source = "Estimated"
+        market = estimate_market(q)
+        source = "Estimated AI"
 
     price = market + 20
 
-    s = score(price, market)
-
-    return jsonify([{
-        "title": q,
+    result = [{
+        "title": q.upper(),
         "price": round(price, 2),
         "market": round(market, 2),
-        "score": s,
-        "label": label(s),
-        "explain": "Analyse basée sur écart prix marché + fallback intelligent",
+        "score": score(price, market),
+        "label": label(score(price, market)),
+        "explain": "Analyse multi-source + fallback intelligent + cache actif",
         "source": source
-    }])
+    }]
+
+    cache_set(q, result)
+
+    return jsonify(result)
 
 # =========================
 # RUN
