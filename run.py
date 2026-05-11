@@ -6,14 +6,24 @@ import random
 app = Flask(__name__)
 
 # =========================
-# CONFIG
+# USERS + SUBSCRIPTION SYSTEM
 # =========================
-USERS_DB = {}
-ALERTS_DB = []
+USERS = {
+    "free": {"requests": 0, "limit": 20}
+}
+
+# =========================
+# PRICE HISTORY (DATA CORE)
+# =========================
 PRICE_HISTORY = {}
 
 # =========================
-# BASE PRODUITS
+# ALERTS SYSTEM
+# =========================
+ALERTS = []
+
+# =========================
+# BASE MARKET
 # =========================
 BASE_MARKET = {
     "ps5": 500,
@@ -25,38 +35,42 @@ BASE_MARKET = {
 }
 
 # =========================
-# FRONTEND DASHBOARD SaaS
+# FRONTEND SaaS DASHBOARD
 # =========================
 HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>SaaS V2 Monetization AI</title>
+<title>SaaS Monetization PRO</title>
 <style>
 body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
 input{padding:10px;width:250px;border-radius:6px;border:none}
-button{padding:10px;background:#22c55e;border:none;border-radius:6px;cursor:pointer;margin:5px}
-.card{background:#1e293b;margin:10px auto;width:450px;padding:15px;border-radius:10px;text-align:left}
+button{padding:10px;background:#22c55e;border:none;border-radius:6px;cursor:pointer}
+.card{background:#1e293b;margin:10px auto;width:460px;padding:15px;border-radius:10px;text-align:left}
 .good{color:#22c55e}
 .mid{color:#facc15}
 .bad{color:#ef4444}
 small{color:#94a3b8}
 .section{margin-top:20px}
+.badge{background:#334155;padding:5px;border-radius:6px;font-size:12px}
 </style>
 </head>
 <body>
 
-<h1>🚀 SaaS V2 AI Deal Platform</h1>
+<h1>🚀 SaaS Monetization PRO</h1>
+
+<p class="badge">Free plan: 20 recherches</p>
 
 <input id="q" placeholder="ex: PS5">
 <button onclick="search()">Search</button>
 
 <div id="out"></div>
 
-<h2 class="section">🔔 Alertes prix</h2>
-<input id="alert_item" placeholder="produit">
-<input id="alert_price" placeholder="prix cible">
-<button onclick="addAlert()">Ajouter alerte</button>
+<h2 class="section">🔔 Alertes</h2>
+
+<input id="item" placeholder="produit">
+<input id="price" placeholder="prix cible">
+<button onclick="addAlert()">Ajouter</button>
 
 <div id="alerts"></div>
 
@@ -78,7 +92,7 @@ async function search(){
             <p>📊 <span class="${c}">${d.score}/100</span></p>
             <p><b>${d.label}</b></p>
             <p>${d.explain}</p>
-            <small>Source: ${d.source}</small>
+            <small>Plan: ${d.plan}</small>
         </div>`;
     });
 
@@ -86,14 +100,10 @@ async function search(){
 }
 
 async function addAlert(){
-    const item=document.getElementById("alert_item").value;
-    const price=document.getElementById("alert_price").value;
+    const item=document.getElementById("item").value;
+    const price=document.getElementById("price").value;
 
-    await fetch("/alert",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({item,price})
-    });
+    await fetch("/alert",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({item,price})});
 
     loadAlerts();
 }
@@ -105,9 +115,7 @@ async function loadAlerts(){
     let html="<h3>Mes alertes</h3>";
 
     data.forEach(a=>{
-        html+=`<div class="card">
-            ${a.item} - cible: ${a.price}€
-        </div>`;
+        html+=`<div class="card">${a.item} → ${a.price}€</div>`;
     });
 
     document.getElementById("alerts").innerHTML=html;
@@ -129,106 +137,113 @@ def home():
     return render_template_string(HTML)
 
 # =========================
-# HISTORIQUE PRIX (DATA ENGINE)
+# SUBSCRIPTION CHECK
 # =========================
-def add_history(product, price):
-    if product not in PRICE_HISTORY:
-        PRICE_HISTORY[product] = []
+def check_limit(user="free"):
+    if USERS[user]["requests"] >= USERS[user]["limit"]:
+        return False
+    USERS[user]["requests"] += 1
+    return True
 
-    PRICE_HISTORY[product].append({
+# =========================
+# MARKET PRICE
+# =========================
+def market_price(q):
+    return BASE_MARKET.get(q.lower(), 500)
+
+# =========================
+# AI SCORING PRO
+# =========================
+def score(price, market):
+    ratio = price / market
+
+    noise = random.uniform(-2, 2)
+
+    return max(0, min(100, round(100 - ratio * 100 + noise, 1)))
+
+# =========================
+# LABEL ENGINE
+# =========================
+def label(s):
+    if s >= 85:
+        return "🔥 Deal exceptionnel"
+    elif s >= 70:
+        return "✅ Bonne affaire"
+    elif s >= 50:
+        return "⚠️ Prix correct"
+    elif s >= 30:
+        return "❌ Peu intéressant"
+    return "❌ Mauvais deal"
+
+# =========================
+# PRICE HISTORY
+# =========================
+def add_history(p, price):
+    PRICE_HISTORY.setdefault(p, []).append({
         "price": price,
         "time": time.time()
     })
 
 # =========================
-# IA SCORING (ML LIGHT SIMULÉ)
-# =========================
-def ai_score(price, market):
-    ratio = price / market
-
-    noise = random.uniform(-3, 3)
-
-    score = 100 - (ratio * 100) + noise
-
-    return max(0, min(100, round(score, 1)))
-
-# =========================
-# LABELS
-# =========================
-def label(score):
-    if score >= 85:
-        return "🔥 Opportunité exceptionnelle"
-    elif score >= 70:
-        return "✅ Bonne affaire"
-    elif score >= 50:
-        return "⚠️ Prix correct"
-    elif score >= 30:
-        return "❌ Peu intéressant"
-    return "❌ Mauvais deal"
-
-# =========================
-# MARKET ESTIMATION
-# =========================
-def estimate(q):
-    q = q.lower()
-    return BASE_MARKET.get(q, 500)
-
-# =========================
-# ENGINE PRINCIPAL
+# SEARCH ENGINE
 # =========================
 @app.route("/search")
 def search():
     q = request.args.get("q","ps5").lower()
 
-    market = estimate(q)
+    # LIMIT SYSTEM (MONETIZATION CORE)
+    if not check_limit():
+        return jsonify([{
+            "title": "LIMIT REACHED",
+            "price": 0,
+            "score": 0,
+            "label": "❌ Upgrade required",
+            "explain": "Limite gratuite atteinte. Passe au plan Pro.",
+            "plan": "FREE"
+        }])
 
-    # simulation prix marché réel
-    price = market + random.randint(-80, 120)
+    market = market_price(q)
 
-    score = ai_score(price, market)
+    price = market + random.randint(-70, 120)
 
-    label_txt = label(score)
+    s = score(price, market)
 
-    # historique
     add_history(q, price)
 
     return jsonify([{
         "title": q.upper(),
         "price": round(price,2),
         "market": market,
-        "score": score,
-        "label": label_txt,
-        "explain": "IA scoring + historique + simulation marché",
-        "source": "AI Engine V2"
+        "score": s,
+        "label": label(s),
+        "explain": "IA scoring + historique + système SaaS",
+        "plan": "FREE"
     }])
 
 # =========================
-# ALERTES PRIX
+# ALERT SYSTEM
 # =========================
 @app.route("/alert", methods=["POST"])
 def alert():
     data = request.json
-
-    ALERTS_DB.append({
-        "item": data["item"],
-        "price": data["price"]
-    })
-
+    ALERTS.append(data)
     return {"status":"ok"}
 
 @app.route("/alerts")
 def alerts():
-    return jsonify(ALERTS_DB)
+    return jsonify(ALERTS)
 
 # =========================
-# ANALYTICS SIMPLE
+# ANALYTICS (PRO SaaS CORE)
 # =========================
 @app.route("/analytics")
 def analytics():
     return jsonify({
-        "tracked_products": len(PRICE_HISTORY),
-        "alerts": len(ALERTS_DB),
-        "history": PRICE_HISTORY
+        "users": len(USERS),
+        "requests_used": USERS["free"]["requests"],
+        "limit": USERS["free"]["limit"],
+        "products_tracked": len(PRICE_HISTORY),
+        "alerts": len(ALERTS)
     })
 
 # =========================
