@@ -1,8 +1,8 @@
-from flask import Flask, render_template_string, request, jsonify, session
-import os
+from flask import Flask, request, jsonify, render_template_string, session
 import sqlite3
-import time
 import random
+import time
+import os
 
 app = Flask(__name__)
 app.secret_key = "saas-secret-key"
@@ -10,7 +10,7 @@ app.secret_key = "saas-secret-key"
 DB = "saas.db"
 
 # =========================
-# INIT DB
+# INIT DATABASE
 # =========================
 def init_db():
     conn = sqlite3.connect(DB)
@@ -19,7 +19,7 @@ def init_db():
     c.execute("""
     CREATE TABLE IF NOT EXISTS users (
         email TEXT PRIMARY KEY,
-        requests INTEGER DEFAULT 0
+        created_at REAL
     )
     """)
 
@@ -28,6 +28,8 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         product TEXT,
         price REAL,
+        market REAL,
+        score REAL,
         ts REAL
     )
     """)
@@ -38,184 +40,117 @@ def init_db():
 init_db()
 
 # =========================
-# BASE MARKET
+# BASE PRIX MARCHE
 # =========================
-BASE = {
+BASE_MARKET = {
     "ps5": 500,
     "xbox": 450,
     "iphone 14": 750,
-    "macbook air m1": 900
+    "macbook air m1": 900,
+    "airpods pro": 220,
+    "nintendo switch": 300
 }
 
 # =========================
-# SCORE IA SIMPLE
+# MARKET ENGINE (SAFE)
+# =========================
+def get_market(q):
+    q = q.lower()
+    base = BASE_MARKET.get(q)
+
+    if base:
+        return base * random.uniform(0.85, 1.15)
+
+    return 500 + random.uniform(-120, 180)
+
+# =========================
+# SCORE FIX (TON LOGIC CORRIGÉE)
 # =========================
 def score(price, market):
-    ratio = price / market
-    return max(0, min(100, round(100 - ratio * 100 + random.uniform(-2,2),1)))
+    low = market * 0.8
+    high = market * 1.2
 
+    if price < low:
+        return 90 + random.uniform(0, 5)
+
+    if price > high:
+        return max(10, 100 - ((price - high) / market) * 100)
+
+    return 60 + random.uniform(-10, 10)
+
+# =========================
+# LABEL
+# =========================
 def label(s):
-    if s > 85: return "🔥 Excellente affaire"
-    if s > 70: return "✅ Bonne affaire"
-    if s > 50: return "⚠️ Prix correct"
-    if s > 30: return "❌ Peu intéressant"
+    if s > 85:
+        return "🔥 Excellente affaire"
+    if s > 70:
+        return "✅ Bonne affaire"
+    if s > 50:
+        return "⚠️ Prix correct"
+    if s > 20:
+        return "❌ Trop cher"
     return "❌ Mauvais deal"
 
 # =========================
-# UI HOME
+# SAVE HISTORY
 # =========================
-HOME = """
-<!DOCTYPE html>
-<html>
-<head>
-<title>SaaS AI Deal PRO</title>
-<style>
-body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
-input{padding:10px;width:250px;border:none;border-radius:6px}
-button{padding:10px;background:#22c55e;border:none;border-radius:6px;cursor:pointer}
-.card{background:#1e293b;margin:10px auto;width:450px;padding:15px;border-radius:10px;text-align:left}
-.good{color:#22c55e}
-.mid{color:#facc15}
-.bad{color:#ef4444}
-a{color:#38bdf8}
-</style>
-</head>
-<body>
+def save_history(p, price, market, score_val):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
 
-<h1>🚀 SaaS AI Deal PRO FULL STACK</h1>
+    c.execute("""
+        INSERT INTO history (product, price, market, score, ts)
+        VALUES (?,?,?,?,?)
+    """, (p, price, market, score_val, time.time()))
 
-<p>
-<a href="/login_page">Login</a> |
-<a href="/admin">Admin</a>
-</p>
-
-<input id="q" placeholder="ex: PS5">
-<button onclick="search()">Search</button>
-
-<div id="out"></div>
-
-<script>
-async function search(){
-    const q=document.getElementById("q").value;
-
-    const res=await fetch("/search?q="+q);
-    const data=await res.json();
-
-    let html="";
-
-    data.forEach(d=>{
-        let c=d.score>80?"good":d.score>50?"mid":"bad";
-
-        html+=`
-        <div class="card">
-            <h3>${d.title}</h3>
-            <p>💰 ${d.price} €</p>
-            <p>📊 <span class="${c}">${d.score}/100</span></p>
-            <p>${d.label}</p>
-        </div>`;
-    });
-
-    document.getElementById("out").innerHTML=html;
-}
-</script>
-
-</body>
-</html>
-"""
+    conn.commit()
+    conn.close()
 
 # =========================
-# LOGIN PAGE
+# LOGIN SIMPLE
 # =========================
-LOGIN_PAGE = """
-<h2>Login SaaS</h2>
-<input id="email" placeholder="email">
-<button onclick="login()">Login</button>
-
-<script>
-async function login(){
-    const email=document.getElementById("email").value;
-
-    await fetch("/login",{method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({email})});
-
-    window.location="/";
-}
-</script>
-"""
-
-# =========================
-# ADMIN PAGE
-# =========================
-ADMIN_PAGE = """
-<h1>Admin Dashboard</h1>
-
-<p>Users: {{users}}</p>
-<p>History: {{history}}</p>
-
-<a href="/">Home</a>
-"""
-
-# =========================
-# HOME ROUTE
-# =========================
-@app.route("/")
-def home():
-    return HOME
-
-# =========================
-# LOGIN
-# =========================
-@app.route("/login_page")
-def login_page():
-    return LOGIN_PAGE
-
 @app.route("/login", methods=["POST"])
 def login():
-    email = request.json["email"]
+    email = request.json.get("email")
 
     conn = sqlite3.connect(DB)
     c = conn.cursor()
 
-    c.execute("INSERT OR IGNORE INTO users (email, requests) VALUES (?,0)", (email,))
+    c.execute("INSERT OR IGNORE INTO users (email, created_at) VALUES (?,?)",
+              (email, time.time()))
+
     conn.commit()
     conn.close()
 
     session["user"] = email
 
-    return {"status":"ok"}
+    return {"status": "logged"}
 
 # =========================
-# SEARCH ENGINE
+# SEARCH API
 # =========================
 @app.route("/search")
 def search():
-    q = request.args.get("q","ps5").lower()
+    q = request.args.get("q", "ps5").lower()
 
-    market = BASE.get(q, 500)
-
-    price = market + random.randint(-80,120)
+    market = get_market(q)
+    price = market * random.uniform(0.75, 1.35)
 
     s = score(price, market)
 
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("INSERT INTO history (product, price, ts) VALUES (?,?,?)",
-              (q, price, time.time()))
-
-    conn.commit()
-    conn.close()
+    save_history(q, price, market, s)
 
     return jsonify([{
         "title": q.upper(),
-        "price": round(price,2),
-        "score": s,
+        "price": round(price, 2),
+        "market": round(market, 2),
+        "score": round(s, 1),
         "label": label(s)
     }])
 
 # =========================
-# ADMIN
+# ADMIN DASHBOARD
 # =========================
 @app.route("/admin")
 def admin():
@@ -227,7 +162,86 @@ def admin():
 
     conn.close()
 
-    return render_template_string(ADMIN_PAGE, users=users, history=history)
+    return {
+        "users": users,
+        "history": history
+    }
+
+# =========================
+# FRONTEND UI
+# =========================
+HOME = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>SaaS IA DEAL PRO</title>
+<style>
+body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
+input{padding:10px;width:260px;border-radius:8px;border:none}
+button{padding:10px;border:none;background:#22c55e;color:white;border-radius:8px;cursor:pointer}
+.card{background:#1e293b;margin:10px auto;width:420px;padding:15px;border-radius:12px;text-align:left}
+.good{color:#22c55e}
+.mid{color:#facc15}
+.bad{color:#ef4444}
+a{color:#38bdf8}
+</style>
+</head>
+<body>
+
+<h1>🚀 SaaS IA DEAL PRO FULL STACK</h1>
+
+<p>
+<a href="#" onclick="login()">Login test</a> |
+<a href="/admin">Admin</a>
+</p>
+
+<input id="q" placeholder="ex: PS5">
+<button onclick="search()">Search</button>
+
+<div id="out"></div>
+
+<script>
+async function login(){
+    await fetch("/login",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({email:"test@test.com"})
+    });
+    alert("Logged in");
+}
+
+async function search(){
+    const q=document.getElementById("q").value;
+
+    const res=await fetch("/search?q="+q);
+    const data=await res.json();
+
+    let html="";
+
+    data.forEach(d=>{
+        let c = d.score>80 ? "good" : d.score>50 ? "mid" : "bad";
+
+        html+=`
+        <div class="card">
+            <h3>${d.title}</h3>
+            <p>💰 ${d.price} €</p>
+            <p>📊 <span class="${c}">${d.score}/100</span></p>
+            <p>${d.label}</p>
+            <p>📉 Market: ${d.market} €</p>
+        </div>`;
+    });
+
+    document.getElementById("out").innerHTML=html;
+}
+</script>
+
+</body>
+</html>
+"""
+
+@app.route("/")
+def home():
+    return HOME
 
 # =========================
 # RUN
