@@ -1,8 +1,7 @@
 from flask import Flask, render_template_string, request, jsonify
-import requests
-import os
 import random
-from bs4 import BeautifulSoup
+import os
+import requests
 
 app = Flask(__name__)
 
@@ -12,54 +11,41 @@ app = Flask(__name__)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # =========================
-# 🔍 SCRAP EBAY (vraies données)
+# 🧠 BASE MARCHÉ (STABLE)
 # =========================
-def generate_real_ads(query):
-
-    if not query:
-        return []
-
-    url = f"https://www.ebay.fr/sch/i.html?_nkw={query}"
-
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        items = soup.select(".s-item")
-
-        results = []
-
-        for item in items[:10]:
-
-            title = item.select_one(".s-item__title")
-            price = item.select_one(".s-item__price")
-
-            if not title or not price:
-                continue
-
-            try:
-                p = price.text.replace("EUR", "").replace("€", "").replace(",", ".")
-                value = float(p.split()[0])
-
-                results.append({
-                    "title": title.text,
-                    "price": value
-                })
-
-            except:
-                continue
-
-        return results
-
-    except:
-        return []
+MARKET_DB = {
+    "ps5": 500,
+    "playstation 5": 500,
+    "iphone": 650,
+    "iphone 13": 520,
+    "macbook air m1": 900,
+    "samsung s21": 360,
+    "airpods": 220,
+    "ipad": 340
+}
 
 # =========================
-# 📊 PRIX MOYEN MARCHÉ
+# 📦 SIMULATION OFFRES
+# =========================
+def generate_ads(query):
+
+    base_price = MARKET_DB.get(query.lower(), 500)
+
+    ads = []
+
+    for i in range(8):
+
+        price = base_price + random.randint(-200, 200)
+
+        ads.append({
+            "title": f"{query.upper()} - Offre {i+1}",
+            "price": max(50, price)
+        })
+
+    return ads
+
+# =========================
+# 📊 PRIX MOYEN
 # =========================
 def market_price(ads):
 
@@ -85,7 +71,7 @@ def score(price, market):
     )
 
 # =========================
-# 🧠 FALLBACK IA
+# ⚡ FALLBACK IA
 # =========================
 def fallback(price, market):
 
@@ -109,11 +95,11 @@ def explain(price, market, title):
         return fallback(price, market)
 
     prompt = f"""
-Produit: {title}
-Prix: {price}€
-Marché: {market}€
+Produit : {title}
+Prix : {price}€
+Marché : {market}€
 
-Analyse en 2 phrases max :
+Analyse en 2 phrases max.
 """
 
     url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
@@ -140,15 +126,17 @@ Analyse en 2 phrases max :
         return fallback(price, market)
 
 # =========================
-# 🎨 FRONT
+# 🎨 FRONTEND
 # =========================
 HTML = """
 <!DOCTYPE html>
 <html>
+
 <head>
 <title>AI Deal SaaS</title>
 
 <style>
+
 body{
     font-family:Arial;
     background:#0f172a;
@@ -168,6 +156,7 @@ button{
     border:none;
     cursor:pointer;
     color:white;
+    font-weight:bold;
 }
 
 .card{
@@ -181,12 +170,13 @@ button{
 
 .good{color:#22c55e;}
 .bad{color:#ef4444;}
+
 </style>
 </head>
 
 <body>
 
-<h1>🚀 AI Deal SaaS (Gemini + eBay)</h1>
+<h1>🚀 AI Deal SaaS (Stable Version)</h1>
 
 <input id="q" placeholder="ex: PS5">
 <button onclick="search()">Search</button>
@@ -200,6 +190,7 @@ async function search(){
     const q = document.getElementById("q").value;
 
     const res = await fetch("/search?q=" + q);
+
     const data = await res.json();
 
     let html = "";
@@ -210,11 +201,17 @@ async function search(){
 
         html += `
         <div class="card">
+
             <h3>${d.title}</h3>
+
             <p>💰 ${d.price} €</p>
+
             <p>📊 <span class="${c}">${d.score}/100</span></p>
+
             <p>${d.explain}</p>
-        </div>`;
+
+        </div>
+        `;
     });
 
     document.getElementById("out").innerHTML = html;
@@ -227,21 +224,21 @@ async function search(){
 """
 
 # =========================
-# 🏠 HOME
+# HOME
 # =========================
 @app.route("/")
 def home():
     return render_template_string(HTML)
 
 # =========================
-# 🔎 SEARCH API
+# API SEARCH
 # =========================
 @app.route("/search")
 def search():
 
-    q = request.args.get("q", "")
+    q = request.args.get("q", "").lower()
 
-    ads = generate_real_ads(q)
+    ads = generate_ads(q)
 
     market = market_price(ads)
 
@@ -259,7 +256,7 @@ def search():
     return jsonify(results)
 
 # =========================
-# 🚀 START
+# START
 # =========================
 port = int(os.environ.get("PORT", 10000))
 
