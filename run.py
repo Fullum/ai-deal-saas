@@ -6,7 +6,7 @@ import random
 app = Flask(__name__)
 
 # =========================
-# ENV VARIABLES
+# ENV VARIABLES (Render)
 # =========================
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -14,13 +14,13 @@ GOOGLE_CX = os.environ.get("GOOGLE_CX")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # =========================
-# FRONT DEMO
+# FRONT SIMPLE
 # =========================
 HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>AI Deal SaaS Pro</title>
+<title>AI Deal SaaS</title>
 <style>
 body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
 input{padding:10px;width:250px}
@@ -32,7 +32,7 @@ button{padding:10px;background:#22c55e;border:none;cursor:pointer}
 </head>
 <body>
 
-<h1>🚀 AI Deal SaaS (Pro Data Mode)</h1>
+<h1>🚀 AI Deal SaaS (Stable)</h1>
 
 <input id="q" placeholder="ex: PS5">
 <button onclick="search()">Search</button>
@@ -67,15 +67,22 @@ async function search(){
 """
 
 # =========================
-# SCORE REALISTE
+# HOME ROUTE (IMPORTANT)
+# =========================
+@app.route("/")
+def home():
+    return render_template_string(HTML)
+
+# =========================
+# SCORE (REALISTE)
 # =========================
 def score(price, market):
-    if market <= 0:
+    if not market:
         return 50
     return round(max(0, min(100, 100 - abs(price - market) / market * 100)), 1)
 
 # =========================
-# EBAY REAL DATA
+# EBAY API
 # =========================
 def get_ebay_price(query):
     if not EBAY_APP_ID:
@@ -113,7 +120,7 @@ def get_ebay_price(query):
     return None
 
 # =========================
-# GOOGLE FALLBACK SEARCH PRICE (simple heuristic)
+# GOOGLE FALLBACK
 # =========================
 def get_google_price(query):
     if not GOOGLE_API_KEY or not GOOGLE_CX:
@@ -127,10 +134,9 @@ def get_google_price(query):
             "q": query + " prix"
         }
 
-        r = requests.get(url, params=params, timeout=5)
+        r = requests.get(url, timeout=5, params=params)
         data = r.json()
 
-        # fallback simple estimation
         if "items" in data:
             return random.randint(300, 700)
 
@@ -140,9 +146,9 @@ def get_google_price(query):
     return None
 
 # =========================
-# GEMINI FALLBACK IA
+# GEMINI SAFE FALLBACK
 # =========================
-def explain_ai(title, price, market):
+def gemini_explain(title, price, market):
     if not GEMINI_API_KEY:
         return "Analyse IA indisponible"
 
@@ -153,7 +159,7 @@ Produit: {title}
 Prix: {price}
 Marché: {market}
 
-Dis si c'est une bonne affaire en 1 phrase.
+Donne une analyse courte (1 phrase).
 """
 
     payload = {
@@ -166,7 +172,7 @@ Dis si c'est une bonne affaire en 1 phrase.
         r = requests.post(url, json=payload, timeout=5)
         data = r.json()
 
-        if "candidates" in data:
+        if "candidates" in data and len(data["candidates"]) > 0:
             return data["candidates"][0]["content"]["parts"][0]["text"]
 
     except:
@@ -175,39 +181,33 @@ Dis si c'est une bonne affaire en 1 phrase.
     return "Analyse indisponible"
 
 # =========================
-# ROUTE SEARCH
+# SEARCH API
 # =========================
 @app.route("/search")
 def search():
     q = request.args.get("q", "PS5")
 
-    # 1. EBAY
     market = get_ebay_price(q)
-
     source = "eBay API"
-    
-    # 2. GOOGLE fallback
+
     if not market:
         market = get_google_price(q)
         source = "Google fallback"
 
-    # 3. dernier fallback
     if not market:
         market = random.randint(300, 700)
-        source = "synthetic fallback"
+        source = "local fallback"
 
-    price = market + random.randint(-100, 100)
+    price = market + random.randint(-80, 80)
 
-    results = [{
+    return jsonify([{
         "title": q,
         "price": round(price, 2),
         "market": round(market, 2),
         "score": score(price, market),
-        "explain": explain_ai(q, price, market),
+        "explain": gemini_explain(q, price, market),
         "source": source
-    }]
-
-    return jsonify(results)
+    }])
 
 # =========================
 # RUN
