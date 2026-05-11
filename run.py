@@ -5,44 +5,46 @@ import requests
 app = Flask(__name__)
 
 # =========================
-# ENV (OPTIONNEL)
+# CONFIG (OPTIONNEL)
 # =========================
 EBAY_APP_ID = os.environ.get("EBAY_APP_ID")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 GOOGLE_CX = os.environ.get("GOOGLE_CX")
 
 # =========================
-# BASE LOCALE STABLE
+# BASE LOCALE (FALLBACK)
 # =========================
 LOCAL_DB = {
     "ps5": 500,
     "xbox": 450,
     "iphone 13": 600,
     "iphone 12": 450,
-    "macbook air m1": 900
+    "macbook air m1": 900,
+    "airpods pro": 220
 }
 
 # =========================
-# FRONTEND
+# FRONTEND SIMPLE SaaS
 # =========================
 HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>AI Deal SaaS</title>
+<title>AI Deal SaaS PRO V3</title>
 <style>
 body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
-input{padding:10px;width:250px}
-button{padding:10px;background:#22c55e;border:none;cursor:pointer}
+input{padding:10px;width:250px;border-radius:6px;border:none}
+button{padding:10px;background:#22c55e;border:none;cursor:pointer;border-radius:6px}
 .card{background:#1e293b;margin:10px auto;width:420px;padding:15px;border-radius:10px;text-align:left}
 .good{color:#22c55e}
-.bad{color:#ef4444}
 .mid{color:#facc15}
+.bad{color:#ef4444}
+small{color:#94a3b8}
 </style>
 </head>
 <body>
 
-<h1>🚀 AI Deal SaaS (Stable Pro)</h1>
+<h1>🚀 AI Deal SaaS PRO V3</h1>
 
 <input id="q" placeholder="ex: PS5">
 <button onclick="search()">Search</button>
@@ -66,7 +68,7 @@ async function search(){
             <p>📊 <span class="${c}">${d.score}/100</span></p>
             <p><b>${d.label}</b></p>
             <p>${d.explain}</p>
-            <small>${d.source}</small>
+            <small>Source: ${d.source}</small>
         </div>`;
     });
 
@@ -86,38 +88,6 @@ def home():
     return render_template_string(HTML)
 
 # =========================
-# SCORE PRO (CORRIGÉ)
-# =========================
-def score(price, market):
-    ratio = price / market
-
-    if ratio < 0.7:
-        return 95
-    elif ratio < 0.85:
-        return 80
-    elif ratio < 1.05:
-        return 60
-    elif ratio < 1.2:
-        return 40
-    else:
-        return 20
-
-# =========================
-# LABELS COHÉRENTS
-# =========================
-def label(score):
-    if score >= 85:
-        return "🔥 Excellente affaire"
-    elif score >= 70:
-        return "✅ Très bonne affaire"
-    elif score >= 50:
-        return "⚠️ Prix correct"
-    elif score >= 30:
-        return "❌ Un peu cher"
-    else:
-        return "❌ Trop cher"
-
-# =========================
 # ESTIMATION INTELLIGENTE
 # =========================
 def estimate_price(q):
@@ -135,7 +105,42 @@ def estimate_price(q):
     return 500
 
 # =========================
-# EBAY (OPTIONNEL)
+# SCORE PRO V3 (REAL MARKET LOGIC)
+# =========================
+def score(price, market):
+    ratio = price / market
+
+    # logique plus réaliste type marketplace
+    if ratio <= 0.70:
+        return 97  # grosse affaire
+    elif ratio <= 0.85:
+        return 85
+    elif ratio <= 0.95:
+        return 70
+    elif ratio <= 1.10:
+        return 55
+    elif ratio <= 1.25:
+        return 35
+    else:
+        return 15
+
+# =========================
+# LABEL PRO
+# =========================
+def label(score):
+    if score >= 90:
+        return "🔥 Opportunité exceptionnelle"
+    elif score >= 75:
+        return "✅ Très bonne affaire"
+    elif score >= 55:
+        return "⚠️ Prix correct"
+    elif score >= 30:
+        return "❌ Peu intéressant"
+    else:
+        return "❌ Mauvaise affaire"
+
+# =========================
+# EBAY (OPTIONNEL SAFE)
 # =========================
 def get_ebay_price(query):
     if not EBAY_APP_ID:
@@ -186,7 +191,7 @@ def get_google_price(query):
             "q": query + " prix"
         }
 
-        r = requests.get(url, params=params, timeout=4)
+        r = requests.get(url, timeout=4, params=params)
         data = r.json()
 
         if "items" in data:
@@ -204,21 +209,17 @@ def get_google_price(query):
 def search():
     q = request.args.get("q", "PS5")
 
-    # 1. eBay
     market = get_ebay_price(q)
     source = "eBay"
 
-    # 2. Google
     if not market:
         market = get_google_price(q)
         source = "Google"
 
-    # 3. Local DB
     if not market:
         market = LOCAL_DB.get(q.lower())
         source = "Local DB"
 
-    # 4. estimation finale
     if not market:
         market = estimate_price(q)
         source = "Estimated"
@@ -233,7 +234,7 @@ def search():
         "market": round(market, 2),
         "score": s,
         "label": label(s),
-        "explain": "Analyse basée sur écart au prix marché",
+        "explain": "Analyse basée sur écart prix marché + fallback intelligent",
         "source": source
     }])
 
