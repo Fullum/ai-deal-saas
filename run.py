@@ -1,43 +1,25 @@
-from flask import Flask, render_template_string, request, jsonify, session, redirect
+from flask import Flask, render_template_string, request, jsonify, session
 import os
+import sqlite3
 import time
 import random
-import sqlite3
-import requests
 
 app = Flask(__name__)
-app.secret_key = "super-secret-key"
+app.secret_key = "saas-secret-key"
 
-# =========================
-# CONFIG ENV
-# =========================
-STRIPE_KEY = os.environ.get("STRIPE_KEY")
-EBAY_APP_ID = os.environ.get("EBAY_APP_ID")
-
-# =========================
-# DATABASE (POSTGRES READY / SQLITE fallback)
-# =========================
 DB = "saas.db"
 
+# =========================
+# INIT DB
+# =========================
 def init_db():
     conn = sqlite3.connect(DB)
     c = conn.cursor()
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT,
-        plan TEXT,
+        email TEXT PRIMARY KEY,
         requests INTEGER DEFAULT 0
-    )
-    """)
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS alerts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_email TEXT,
-        product TEXT,
-        target_price REAL
     )
     """)
 
@@ -46,7 +28,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         product TEXT,
         price REAL,
-        timestamp REAL
+        ts REAL
     )
     """)
 
@@ -66,195 +48,174 @@ BASE = {
 }
 
 # =========================
-# LOGIN SIMPLE
+# SCORE IA SIMPLE
 # =========================
-@app.route("/login", methods=["POST"])
-def login():
-    email = request.json["email"]
+def score(price, market):
+    ratio = price / market
+    return max(0, min(100, round(100 - ratio * 100 + random.uniform(-2,2),1)))
 
-    session["user"] = email
-
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("INSERT OR IGNORE INTO users (email, plan, requests) VALUES (?, 'free', 0)", (email,))
-    conn.commit()
-    conn.close()
-
-    return {"status": "logged", "user": email}
-
-# =========================
-# GET USER
-# =========================
-def get_user(email):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("SELECT plan, requests FROM users WHERE email=?", (email,))
-    user = c.fetchone()
-
-    conn.close()
-
-    return user if user else ("free", 0)
-
-# =========================
-# LIMIT SYSTEM (MONETIZATION)
-# =========================
-def check_limit(email):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("SELECT requests FROM users WHERE email=?", (email,))
-    r = c.fetchone()[0]
-
-    if r >= 30:
-        return False
-
-    c.execute("UPDATE users SET requests = requests + 1 WHERE email=?", (email,))
-    conn.commit()
-    conn.close()
-
-    return True
-
-# =========================
-# EBAY SCRAPER SAFE
-# =========================
-def ebay_price(q):
-    if not EBAY_APP_ID:
-        return None
-
-    try:
-        url = "https://svcs.ebay.com/services/search/FindingService/v1"
-        params = {
-            "OPERATION-NAME": "findItemsByKeywords",
-            "SERVICE-VERSION": "1.0.0",
-            "SECURITY-APPNAME": EBAY_APP_ID,
-            "RESPONSE-DATA-FORMAT": "JSON",
-            "keywords": q
-        }
-
-        r = requests.get(url, params=params, timeout=4)
-        data = r.json()
-
-        items = data["findItemsByKeywordsResponse"][0]["searchResult"][0].get("item", [])
-
-        prices = []
-        for i in items:
-            try:
-                prices.append(float(i["sellingStatus"][0]["currentPrice"][0]["__value__"]))
-            except:
-                pass
-
-        if prices:
-            return sum(prices) / len(prices)
-
-    except:
-        pass
-
-    return None
-
-# =========================
-# MARKET PRICE
-# =========================
-def market(q):
-    return BASE.get(q.lower(), 500)
-
-# =========================
-# AI SCORE PRO
-# =========================
-def score(price, m):
-    ratio = price / m
-    return max(0, min(100, round(100 - ratio * 100 + random.uniform(-2, 2), 1)))
-
-# =========================
-# LABEL
-# =========================
 def label(s):
-    if s > 85: return "🔥 Deal exceptionnel"
+    if s > 85: return "🔥 Excellente affaire"
     if s > 70: return "✅ Bonne affaire"
     if s > 50: return "⚠️ Prix correct"
     if s > 30: return "❌ Peu intéressant"
     return "❌ Mauvais deal"
 
 # =========================
-# SAVE HISTORY
+# UI HOME
 # =========================
-def save_history(p, price):
+HOME = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>SaaS AI Deal PRO</title>
+<style>
+body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
+input{padding:10px;width:250px;border:none;border-radius:6px}
+button{padding:10px;background:#22c55e;border:none;border-radius:6px;cursor:pointer}
+.card{background:#1e293b;margin:10px auto;width:450px;padding:15px;border-radius:10px;text-align:left}
+.good{color:#22c55e}
+.mid{color:#facc15}
+.bad{color:#ef4444}
+a{color:#38bdf8}
+</style>
+</head>
+<body>
+
+<h1>🚀 SaaS AI Deal PRO FULL STACK</h1>
+
+<p>
+<a href="/login_page">Login</a> |
+<a href="/admin">Admin</a>
+</p>
+
+<input id="q" placeholder="ex: PS5">
+<button onclick="search()">Search</button>
+
+<div id="out"></div>
+
+<script>
+async function search(){
+    const q=document.getElementById("q").value;
+
+    const res=await fetch("/search?q="+q);
+    const data=await res.json();
+
+    let html="";
+
+    data.forEach(d=>{
+        let c=d.score>80?"good":d.score>50?"mid":"bad";
+
+        html+=`
+        <div class="card">
+            <h3>${d.title}</h3>
+            <p>💰 ${d.price} €</p>
+            <p>📊 <span class="${c}">${d.score}/100</span></p>
+            <p>${d.label}</p>
+        </div>`;
+    });
+
+    document.getElementById("out").innerHTML=html;
+}
+</script>
+
+</body>
+</html>
+"""
+
+# =========================
+# LOGIN PAGE
+# =========================
+LOGIN_PAGE = """
+<h2>Login SaaS</h2>
+<input id="email" placeholder="email">
+<button onclick="login()">Login</button>
+
+<script>
+async function login(){
+    const email=document.getElementById("email").value;
+
+    await fetch("/login",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({email})});
+
+    window.location="/";
+}
+</script>
+"""
+
+# =========================
+# ADMIN PAGE
+# =========================
+ADMIN_PAGE = """
+<h1>Admin Dashboard</h1>
+
+<p>Users: {{users}}</p>
+<p>History: {{history}}</p>
+
+<a href="/">Home</a>
+"""
+
+# =========================
+# HOME ROUTE
+# =========================
+@app.route("/")
+def home():
+    return HOME
+
+# =========================
+# LOGIN
+# =========================
+@app.route("/login_page")
+def login_page():
+    return LOGIN_PAGE
+
+@app.route("/login", methods=["POST"])
+def login():
+    email = request.json["email"]
+
     conn = sqlite3.connect(DB)
     c = conn.cursor()
 
-    c.execute("INSERT INTO history (product, price, timestamp) VALUES (?, ?, ?)",
-              (p, price, time.time()))
-
+    c.execute("INSERT OR IGNORE INTO users (email, requests) VALUES (?,0)", (email,))
     conn.commit()
     conn.close()
 
-# =========================
-# SEARCH ENGINE FULL STACK
-# =========================
-@app.route("/search")
-def search():
-    if "user" not in session:
-        return jsonify({"error": "not logged"})
-
-    user = session["user"]
-
-    if not check_limit(user):
-        return jsonify([{
-            "title": "UPGRADE REQUIRED",
-            "price": 0,
-            "score": 0,
-            "label": "❌ LIMIT REACHED",
-            "plan": "FREE"
-        }])
-
-    q = request.args.get("q","ps5").lower()
-
-    m = ebay_price(q)
-    source = "eBay" if m else "Local"
-
-    if not m:
-        m = market(q)
-
-    price = m + random.randint(-60, 120)
-
-    s = score(price, m)
-
-    save_history(q, price)
-
-    return jsonify([{
-        "title": q.upper(),
-        "price": round(price,2),
-        "market": m,
-        "score": s,
-        "label": label(s),
-        "source": source,
-        "plan": "FREE"
-    }])
-
-# =========================
-# ALERT SYSTEM
-# =========================
-@app.route("/alert", methods=["POST"])
-def alert():
-    if "user" not in session:
-        return {"error": "not logged"}
-
-    data = request.json
-
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("INSERT INTO alerts (user_email, product, target_price) VALUES (?, ?, ?)",
-              (session["user"], data["item"], data["price"]))
-
-    conn.commit()
-    conn.close()
+    session["user"] = email
 
     return {"status":"ok"}
 
 # =========================
-# ADMIN DASHBOARD
+# SEARCH ENGINE
+# =========================
+@app.route("/search")
+def search():
+    q = request.args.get("q","ps5").lower()
+
+    market = BASE.get(q, 500)
+
+    price = market + random.randint(-80,120)
+
+    s = score(price, market)
+
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    c.execute("INSERT INTO history (product, price, ts) VALUES (?,?,?)",
+              (q, price, time.time()))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify([{
+        "title": q.upper(),
+        "price": round(price,2),
+        "score": s,
+        "label": label(s)
+    }])
+
+# =========================
+# ADMIN
 # =========================
 @app.route("/admin")
 def admin():
@@ -262,34 +223,14 @@ def admin():
     c = conn.cursor()
 
     users = c.execute("SELECT * FROM users").fetchall()
-    alerts = c.execute("SELECT * FROM alerts").fetchall()
-    history = c.execute("SELECT * FROM history").fetchall()
+    history = c.execute("SELECT * FROM history ORDER BY id DESC LIMIT 20").fetchall()
 
-    return {
-        "users": users,
-        "alerts": alerts,
-        "history": history
-    }
+    conn.close()
+
+    return render_template_string(ADMIN_PAGE, users=users, history=history)
 
 # =========================
-# STRIPE PLACEHOLDER (READY)
+# RUN
 # =========================
-@app.route("/checkout")
-def checkout():
-    return {
-        "message": "Stripe integration ready",
-        "status": "add STRIPE_KEY + webhook next step"
-    }
-
-# =========================
-# INIT
-# =========================
-@app.route("/")
-def home():
-    return """
-    <h1>SaaS PRO FULL STACK</h1>
-    <p>Use /login, /search, /admin</p>
-    """
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
