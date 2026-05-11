@@ -44,15 +44,43 @@ def generate_ads():
 # SCORE IA
 # =========================
 def score(price, market):
-    return max(0, min(100, round(50 + ((market - price) / market) * 120, 1)))
+    return max(
+        0,
+        min(
+            100,
+            round(50 + ((market - price) / market) * 120, 1)
+        )
+    )
+
+# =========================
+# FALLBACK SI IA HS
+# =========================
+def fallback_analysis(price, market):
+
+    diff = price - market
+
+    if diff <= -50:
+        return "🔥 Excellente affaire. Le prix est largement inférieur au marché."
+
+    elif diff < 0:
+        return "✅ Bonne affaire. Prix légèrement inférieur au marché."
+
+    elif diff <= 50:
+        return "⚠️ Prix correct mais peu intéressant."
+
+    else:
+        return "❌ Trop cher par rapport au prix moyen du marché."
 
 # =========================
 # GEMINI AI ANALYSIS
 # =========================
 def explain(price, market, title):
 
+    # =========================
+    # PAS DE CLÉ
+    # =========================
     if not GEMINI_API_KEY:
-        return "Clé Gemini manquante"
+        return fallback_analysis(price, market)
 
     prompt = f"""
 Tu es un expert en analyse de prix.
@@ -61,24 +89,29 @@ Produit : {title}
 Prix affiché : {price}€
 Prix moyen du marché : {market}€
 
-Donne une analyse courte en français (2 phrases max).
-Dis si c'est une bonne affaire ou non.
+Donne une analyse courte en français.
+Maximum 2 phrases.
 """
 
-    # ✅ NOUVEAU MODÈLE GEMINI
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    url = (
+        "https://generativelanguage.googleapis.com/v1/models/"
+        f"gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    )
 
     payload = {
         "contents": [
             {
                 "parts": [
-                    {"text": prompt}
+                    {
+                        "text": prompt
+                    }
                 ]
             }
         ]
     }
 
     try:
+
         response = requests.post(
             url,
             json=payload,
@@ -88,24 +121,31 @@ Dis si c'est une bonne affaire ou non.
         data = response.json()
 
         # =========================
-        # DEBUG ERREUR API
+        # ERREUR API
         # =========================
         if "error" in data:
-            return f"Erreur Gemini: {data['error']['message']}"
+
+            error_msg = str(data["error"])
+
+            # QUOTA GOOGLE
+            if "quota" in error_msg.lower():
+                return fallback_analysis(price, market)
+
+            return "⚠️ IA temporairement indisponible."
 
         # =========================
-        # VÉRIFICATION RÉPONSE
+        # FORMAT INVALIDE
         # =========================
         if "candidates" not in data:
-            return f"Réponse inconnue: {data}"
+            return fallback_analysis(price, market)
 
         # =========================
-        # TEXTE IA
+        # RÉPONSE IA
         # =========================
         return data["candidates"][0]["content"]["parts"][0]["text"]
 
-    except Exception as e:
-        return f"Erreur IA: {str(e)}"
+    except:
+        return fallback_analysis(price, market)
 
 # =========================
 # FRONTEND HTML
@@ -113,10 +153,13 @@ Dis si c'est une bonne affaire ou non.
 HTML = """
 <!DOCTYPE html>
 <html>
+
 <head>
+
 <title>AI Deal SaaS</title>
 
 <style>
+
 body{
     font-family:Arial;
     background:#0f172a;
@@ -135,6 +178,8 @@ button{
     background:#22c55e;
     border:none;
     cursor:pointer;
+    color:white;
+    font-weight:bold;
 }
 
 .card{
@@ -153,7 +198,9 @@ button{
 .bad{
     color:#ef4444;
 }
+
 </style>
+
 </head>
 
 <body>
@@ -166,6 +213,7 @@ button{
 <div id="out"></div>
 
 <script>
+
 async function search(){
 
     const q = document.getElementById("q").value;
@@ -182,6 +230,7 @@ async function search(){
 
         html += `
         <div class="card">
+
             <h3>${d.title}</h3>
 
             <p>💰 ${d.price} €</p>
@@ -194,12 +243,14 @@ async function search(){
             </p>
 
             <p>${d.explain}</p>
+
         </div>
         `;
     });
 
     document.getElementById("out").innerHTML = html;
 }
+
 </script>
 
 </body>
@@ -224,17 +275,28 @@ def search():
     ads = generate_ads()
 
     if q:
-        ads = [a for a in ads if q in a["title"].lower()]
+        ads = [
+            a for a in ads
+            if q in a["title"].lower()
+        ]
 
     results = []
 
     for a in ads:
 
         results.append({
+
             "title": a["title"],
+
             "price": a["price"],
+
             "market": a["market"],
-            "score": score(a["price"], a["market"]),
+
+            "score": score(
+                a["price"],
+                a["market"]
+            ),
+
             "explain": explain(
                 a["price"],
                 a["market"],
@@ -256,4 +318,7 @@ def search():
 port = int(os.environ.get("PORT", 10000))
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=port)
+    app.run(
+        host="0.0.0.0",
+        port=port
+    )
