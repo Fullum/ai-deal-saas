@@ -1,15 +1,9 @@
 from flask import Flask, render_template_string, request, jsonify
 import random
 import os
-
-# =========================
-# 🔥 IA (OpenAI)
-# =========================
-from openai import OpenAI
+import requests
 
 app = Flask(__name__)
-
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # =========================
 # BASE DE DONNÉES SIMULÉE
@@ -26,7 +20,7 @@ MARKET_DB = {
 }
 
 # =========================
-# GÉNÉRATION PRODUITS
+# PRODUITS
 # =========================
 def generate_ads():
     return [
@@ -39,40 +33,46 @@ def generate_ads():
     ]
 
 # =========================
-# SCORE (simple)
+# SCORE
 # =========================
 def score(price, market):
     return max(0, min(100, round(50 + ((market - price) / market) * 120, 1)))
 
 # =========================
-# 🤖 IA (REMPLACE L'ANCIENNE LOGIQUE)
+# 🤖 GEMINI IA
 # =========================
 def explain(price, market, title):
     prompt = f"""
 Tu es un expert en analyse de prix.
 
 Produit: {title}
-Prix affiché: {price}€
-Prix du marché: {market}€
+Prix: {price}€
+Prix marché: {market}€
 
-Donne une analyse courte (max 2 phrases) :
-- est-ce une bonne affaire ou non
-- pourquoi
+Dis en 2 phrases max si c'est une bonne affaire et pourquoi.
 """
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+        url = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent"
+
+        response = requests.post(
+            url,
+            params={"key": os.environ.get("GEMINI_API_KEY")},
+            json={
+                "contents": [
+                    {"parts": [{"text": prompt}]}
+                ]
+            }
         )
-        return response.choices[0].message.content
+
+        data = response.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+
     except:
         return "Analyse IA indisponible"
 
 # =========================
-# FRONTEND HTML
+# FRONTEND
 # =========================
 HTML = """
 <!DOCTYPE html>
@@ -90,7 +90,7 @@ button{padding:10px;background:#22c55e;border:none;cursor:pointer}
 </head>
 <body>
 
-<h1>🚀 AI Deal SaaS (IA activée)</h1>
+<h1>🚀 AI Deal SaaS (Gemini)</h1>
 
 <input id="q" placeholder="ex: iPhone">
 <button onclick="search()">Search</button>
@@ -124,15 +124,12 @@ async function search(){
 """
 
 # =========================
-# ROUTE HOME
+# ROUTES
 # =========================
 @app.route("/")
 def home():
     return render_template_string(HTML)
 
-# =========================
-# API SEARCH
-# =========================
 @app.route("/search")
 def search():
     q = request.args.get("q", "").lower()
@@ -148,17 +145,13 @@ def search():
             "price": a["price"],
             "market": a["market"],
             "score": score(a["price"], a["market"]),
-
-            # =========================
-            # 🔥 IA ICI
-            # =========================
             "explain": explain(a["price"], a["market"], a["title"])
         })
 
     return jsonify(sorted(results, key=lambda x: x["score"], reverse=True))
 
 # =========================
-# RENDER START CONFIG
+# START
 # =========================
 port = int(os.environ.get("PORT", 10000))
 
