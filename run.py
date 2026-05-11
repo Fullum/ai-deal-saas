@@ -1,222 +1,234 @@
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, session, redirect
 import os
 import time
 import random
+import sqlite3
+import requests
 
 app = Flask(__name__)
+app.secret_key = "super-secret-key"
 
 # =========================
-# USERS + SUBSCRIPTION SYSTEM
+# CONFIG ENV
 # =========================
-USERS = {
-    "free": {"requests": 0, "limit": 20}
-}
+STRIPE_KEY = os.environ.get("STRIPE_KEY")
+EBAY_APP_ID = os.environ.get("EBAY_APP_ID")
 
 # =========================
-# PRICE HISTORY (DATA CORE)
+# DATABASE (POSTGRES READY / SQLITE fallback)
 # =========================
-PRICE_HISTORY = {}
+DB = "saas.db"
 
-# =========================
-# ALERTS SYSTEM
-# =========================
-ALERTS = []
+def init_db():
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT,
+        plan TEXT,
+        requests INTEGER DEFAULT 0
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_email TEXT,
+        product TEXT,
+        target_price REAL
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product TEXT,
+        price REAL,
+        timestamp REAL
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+init_db()
 
 # =========================
 # BASE MARKET
 # =========================
-BASE_MARKET = {
+BASE = {
     "ps5": 500,
     "xbox": 450,
-    "iphone 13": 600,
     "iphone 14": 750,
-    "macbook air m1": 900,
-    "airpods pro": 220
+    "macbook air m1": 900
 }
 
 # =========================
-# FRONTEND SaaS DASHBOARD
+# LOGIN SIMPLE
 # =========================
-HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-<title>SaaS Monetization PRO</title>
-<style>
-body{font-family:Arial;background:#0f172a;color:white;text-align:center;padding:20px}
-input{padding:10px;width:250px;border-radius:6px;border:none}
-button{padding:10px;background:#22c55e;border:none;border-radius:6px;cursor:pointer}
-.card{background:#1e293b;margin:10px auto;width:460px;padding:15px;border-radius:10px;text-align:left}
-.good{color:#22c55e}
-.mid{color:#facc15}
-.bad{color:#ef4444}
-small{color:#94a3b8}
-.section{margin-top:20px}
-.badge{background:#334155;padding:5px;border-radius:6px;font-size:12px}
-</style>
-</head>
-<body>
+@app.route("/login", methods=["POST"])
+def login():
+    email = request.json["email"]
 
-<h1>🚀 SaaS Monetization PRO</h1>
+    session["user"] = email
 
-<p class="badge">Free plan: 20 recherches</p>
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
 
-<input id="q" placeholder="ex: PS5">
-<button onclick="search()">Search</button>
+    c.execute("INSERT OR IGNORE INTO users (email, plan, requests) VALUES (?, 'free', 0)", (email,))
+    conn.commit()
+    conn.close()
 
-<div id="out"></div>
-
-<h2 class="section">🔔 Alertes</h2>
-
-<input id="item" placeholder="produit">
-<input id="price" placeholder="prix cible">
-<button onclick="addAlert()">Ajouter</button>
-
-<div id="alerts"></div>
-
-<script>
-
-async function search(){
-    const q=document.getElementById("q").value;
-    const res=await fetch("/search?q="+q);
-    const data=await res.json();
-
-    let html="";
-    data.forEach(d=>{
-        let c = d.score>=80?"good":d.score>=50?"mid":"bad";
-
-        html+=`
-        <div class="card">
-            <h3>${d.title}</h3>
-            <p>💰 ${d.price} €</p>
-            <p>📊 <span class="${c}">${d.score}/100</span></p>
-            <p><b>${d.label}</b></p>
-            <p>${d.explain}</p>
-            <small>Plan: ${d.plan}</small>
-        </div>`;
-    });
-
-    document.getElementById("out").innerHTML=html;
-}
-
-async function addAlert(){
-    const item=document.getElementById("item").value;
-    const price=document.getElementById("price").value;
-
-    await fetch("/alert",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({item,price})});
-
-    loadAlerts();
-}
-
-async function loadAlerts(){
-    const res=await fetch("/alerts");
-    const data=await res.json();
-
-    let html="<h3>Mes alertes</h3>";
-
-    data.forEach(a=>{
-        html+=`<div class="card">${a.item} → ${a.price}€</div>`;
-    });
-
-    document.getElementById("alerts").innerHTML=html;
-}
-
-loadAlerts();
-
-</script>
-
-</body>
-</html>
-"""
+    return {"status": "logged", "user": email}
 
 # =========================
-# HOME
+# GET USER
 # =========================
-@app.route("/")
-def home():
-    return render_template_string(HTML)
+def get_user(email):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    c.execute("SELECT plan, requests FROM users WHERE email=?", (email,))
+    user = c.fetchone()
+
+    conn.close()
+
+    return user if user else ("free", 0)
 
 # =========================
-# SUBSCRIPTION CHECK
+# LIMIT SYSTEM (MONETIZATION)
 # =========================
-def check_limit(user="free"):
-    if USERS[user]["requests"] >= USERS[user]["limit"]:
+def check_limit(email):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    c.execute("SELECT requests FROM users WHERE email=?", (email,))
+    r = c.fetchone()[0]
+
+    if r >= 30:
         return False
-    USERS[user]["requests"] += 1
+
+    c.execute("UPDATE users SET requests = requests + 1 WHERE email=?", (email,))
+    conn.commit()
+    conn.close()
+
     return True
+
+# =========================
+# EBAY SCRAPER SAFE
+# =========================
+def ebay_price(q):
+    if not EBAY_APP_ID:
+        return None
+
+    try:
+        url = "https://svcs.ebay.com/services/search/FindingService/v1"
+        params = {
+            "OPERATION-NAME": "findItemsByKeywords",
+            "SERVICE-VERSION": "1.0.0",
+            "SECURITY-APPNAME": EBAY_APP_ID,
+            "RESPONSE-DATA-FORMAT": "JSON",
+            "keywords": q
+        }
+
+        r = requests.get(url, params=params, timeout=4)
+        data = r.json()
+
+        items = data["findItemsByKeywordsResponse"][0]["searchResult"][0].get("item", [])
+
+        prices = []
+        for i in items:
+            try:
+                prices.append(float(i["sellingStatus"][0]["currentPrice"][0]["__value__"]))
+            except:
+                pass
+
+        if prices:
+            return sum(prices) / len(prices)
+
+    except:
+        pass
+
+    return None
 
 # =========================
 # MARKET PRICE
 # =========================
-def market_price(q):
-    return BASE_MARKET.get(q.lower(), 500)
+def market(q):
+    return BASE.get(q.lower(), 500)
 
 # =========================
-# AI SCORING PRO
+# AI SCORE PRO
 # =========================
-def score(price, market):
-    ratio = price / market
-
-    noise = random.uniform(-2, 2)
-
-    return max(0, min(100, round(100 - ratio * 100 + noise, 1)))
+def score(price, m):
+    ratio = price / m
+    return max(0, min(100, round(100 - ratio * 100 + random.uniform(-2, 2), 1)))
 
 # =========================
-# LABEL ENGINE
+# LABEL
 # =========================
 def label(s):
-    if s >= 85:
-        return "🔥 Deal exceptionnel"
-    elif s >= 70:
-        return "✅ Bonne affaire"
-    elif s >= 50:
-        return "⚠️ Prix correct"
-    elif s >= 30:
-        return "❌ Peu intéressant"
+    if s > 85: return "🔥 Deal exceptionnel"
+    if s > 70: return "✅ Bonne affaire"
+    if s > 50: return "⚠️ Prix correct"
+    if s > 30: return "❌ Peu intéressant"
     return "❌ Mauvais deal"
 
 # =========================
-# PRICE HISTORY
+# SAVE HISTORY
 # =========================
-def add_history(p, price):
-    PRICE_HISTORY.setdefault(p, []).append({
-        "price": price,
-        "time": time.time()
-    })
+def save_history(p, price):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    c.execute("INSERT INTO history (product, price, timestamp) VALUES (?, ?, ?)",
+              (p, price, time.time()))
+
+    conn.commit()
+    conn.close()
 
 # =========================
-# SEARCH ENGINE
+# SEARCH ENGINE FULL STACK
 # =========================
 @app.route("/search")
 def search():
-    q = request.args.get("q","ps5").lower()
+    if "user" not in session:
+        return jsonify({"error": "not logged"})
 
-    # LIMIT SYSTEM (MONETIZATION CORE)
-    if not check_limit():
+    user = session["user"]
+
+    if not check_limit(user):
         return jsonify([{
-            "title": "LIMIT REACHED",
+            "title": "UPGRADE REQUIRED",
             "price": 0,
             "score": 0,
-            "label": "❌ Upgrade required",
-            "explain": "Limite gratuite atteinte. Passe au plan Pro.",
+            "label": "❌ LIMIT REACHED",
             "plan": "FREE"
         }])
 
-    market = market_price(q)
+    q = request.args.get("q","ps5").lower()
 
-    price = market + random.randint(-70, 120)
+    m = ebay_price(q)
+    source = "eBay" if m else "Local"
 
-    s = score(price, market)
+    if not m:
+        m = market(q)
 
-    add_history(q, price)
+    price = m + random.randint(-60, 120)
+
+    s = score(price, m)
+
+    save_history(q, price)
 
     return jsonify([{
         "title": q.upper(),
         "price": round(price,2),
-        "market": market,
+        "market": m,
         "score": s,
         "label": label(s),
-        "explain": "IA scoring + historique + système SaaS",
+        "source": source,
         "plan": "FREE"
     }])
 
@@ -225,29 +237,59 @@ def search():
 # =========================
 @app.route("/alert", methods=["POST"])
 def alert():
+    if "user" not in session:
+        return {"error": "not logged"}
+
     data = request.json
-    ALERTS.append(data)
+
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    c.execute("INSERT INTO alerts (user_email, product, target_price) VALUES (?, ?, ?)",
+              (session["user"], data["item"], data["price"]))
+
+    conn.commit()
+    conn.close()
+
     return {"status":"ok"}
 
-@app.route("/alerts")
-def alerts():
-    return jsonify(ALERTS)
+# =========================
+# ADMIN DASHBOARD
+# =========================
+@app.route("/admin")
+def admin():
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    users = c.execute("SELECT * FROM users").fetchall()
+    alerts = c.execute("SELECT * FROM alerts").fetchall()
+    history = c.execute("SELECT * FROM history").fetchall()
+
+    return {
+        "users": users,
+        "alerts": alerts,
+        "history": history
+    }
 
 # =========================
-# ANALYTICS (PRO SaaS CORE)
+# STRIPE PLACEHOLDER (READY)
 # =========================
-@app.route("/analytics")
-def analytics():
-    return jsonify({
-        "users": len(USERS),
-        "requests_used": USERS["free"]["requests"],
-        "limit": USERS["free"]["limit"],
-        "products_tracked": len(PRICE_HISTORY),
-        "alerts": len(ALERTS)
-    })
+@app.route("/checkout")
+def checkout():
+    return {
+        "message": "Stripe integration ready",
+        "status": "add STRIPE_KEY + webhook next step"
+    }
 
 # =========================
-# RUN
+# INIT
 # =========================
+@app.route("/")
+def home():
+    return """
+    <h1>SaaS PRO FULL STACK</h1>
+    <p>Use /login, /search, /admin</p>
+    """
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
